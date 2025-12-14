@@ -221,6 +221,22 @@ ollama pull qwen2.5
 autosub video.mp4 --translate zh --llm-provider ollama --llm-model qwen2.5
 ```
 
+## 开发
+
+### Mel 滤波器组
+
+Mel 滤波器文件（`src/melfilters.bytes` 和 `src/melfilters128.bytes`）是从 OpenAI Whisper Python 库预计算得到的。它们包含用于将 FFT 频谱图转换为梅尔刻度频谱图的三角滤波器组矩阵。
+
+如需重新生成这些文件（需要 `openai-whisper` Python 包）：
+
+```bash
+pip install openai-whisper
+python scripts/generate_melfilters.py
+```
+
+- `melfilters.bytes` - 80 个梅尔频段，用于 tiny/base/small/medium 模型
+- `melfilters128.bytes` - 128 个梅尔频段，用于 large-v3 模型
+
 ## 许可证
 
 MIT

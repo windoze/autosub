@@ -178,6 +178,22 @@ autosub movie.srt --translate-only --translate zh \
   --llm-provider deepseek --llm-api-key $DEEPSEEK_API_KEY
 ```
 
+## Development
+
+### Mel Filter Banks
+
+The mel filter bank files (`src/melfilters.bytes` and `src/melfilters128.bytes`) are pre-computed from the OpenAI Whisper Python library. They contain triangular filter bank matrices used to convert FFT spectrograms to mel-scale spectrograms.
+
+To regenerate these files (requires `openai-whisper` Python package):
+
+```bash
+pip install openai-whisper
+python scripts/generate_melfilters.py
+```
+
+- `melfilters.bytes` - 80 mel bins, used by tiny/base/small/medium models
+- `melfilters128.bytes` - 128 mel bins, used by large-v3 model
+
 ## License
 
 MIT
