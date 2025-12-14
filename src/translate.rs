@@ -32,6 +32,7 @@ pub async fn translate_subtitles_to_file(
     api_key: &str,
     model: &str,
     base_url: Option<&str>,
+    batch_size: usize,
 ) -> Result<Subtitle> {
     let mut writer = SrtWriter::create(output_path)?;
     let result = translate_subtitles_to_writer(
@@ -42,6 +43,7 @@ pub async fn translate_subtitles_to_file(
         api_key,
         model,
         base_url,
+        batch_size,
     )
     .await?;
     writer.finish()?;
@@ -57,6 +59,7 @@ pub async fn translate_subtitles_to_writer<W: Write>(
     api_key: &str,
     model: &str,
     base_url: Option<&str>,
+    batch_size: usize,
 ) -> Result<Subtitle> {
     info!(
         "Translating {} subtitle entries to {} using {:?}...",
@@ -99,8 +102,7 @@ pub async fn translate_subtitles_to_writer<W: Write>(
             .progress_chars("#>-"),
     );
 
-    // Batch translations for efficiency (translate in groups of 10)
-    let batch_size = 10;
+    // Batch translations for efficiency
     let batches: Vec<_> = subtitle.entries.chunks(batch_size).collect();
 
     for batch in batches {
@@ -170,6 +172,7 @@ pub async fn translate_subtitles(
     api_key: &str,
     model: &str,
     base_url: Option<&str>,
+    batch_size: usize,
 ) -> Result<Subtitle> {
     info!(
         "Translating {} subtitle entries to {} using {:?}...",
@@ -212,8 +215,7 @@ pub async fn translate_subtitles(
             .progress_chars("#>-"),
     );
 
-    // Batch translations for efficiency (translate in groups of 10)
-    let batch_size = 10;
+    // Batch translations for efficiency
     let batches: Vec<_> = subtitle.entries.chunks(batch_size).collect();
 
     for batch in batches {

@@ -186,6 +186,11 @@ pub struct Config {
     #[arg(long, env = "AUTOSUB_LLM_MODEL", default_value = "gpt-4o-mini")]
     pub llm_model: String,
 
+    /// Translation batch size (number of subtitle entries per LLM request).
+    /// Larger values may improve translation quality but require more context window.
+    #[arg(long, env = "AUTOSUB_TRANSLATION_BATCH_SIZE", default_value = "10")]
+    pub translation_batch_size: usize,
+
     /// Model cache directory
     #[arg(long, value_name = "DIR")]
     pub cache_dir: Option<PathBuf>,

@@ -166,6 +166,7 @@ async fn translate_subtitle(subtitle: &Subtitle, target_lang: &str, config: &Con
         api_key,
         &config.llm_model,
         config.llm_url.as_deref(),
+        config.translation_batch_size,
     )
     .await
     .context("Failed to translate subtitles")?;
