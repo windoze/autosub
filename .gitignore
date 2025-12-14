@@ -1,0 +1,5 @@
+/.claude
+/target
+/test
+.envrc*
+.DS_Store
