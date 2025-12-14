@@ -27,14 +27,11 @@ A CLI tool for video/audio transcription and subtitle generation using Whisper, 
 git clone https://github.com/user/autosub.git
 cd autosub
 
-# Build with default settings (Metal enabled on macOS)
+# Build (Metal auto-enabled on macOS, CPU on other platforms)
 cargo build --release
 
 # Build with CUDA acceleration (NVIDIA GPU, requires CUDA toolkit)
-cargo build --release --features cuda --no-default-features
-
-# Build for CPU only
-cargo build --release --no-default-features
+cargo build --release --features cuda
 ```
 
 The binary will be available at `target/release/autosub`.

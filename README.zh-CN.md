@@ -27,14 +27,11 @@
 git clone https://github.com/user/autosub.git
 cd autosub
 
-# 使用默认设置构建（macOS 自动启用 Metal）
+# 构建（macOS 自动启用 Metal，其他平台使用 CPU）
 cargo build --release
 
 # 使用 CUDA 加速构建（NVIDIA GPU，需要安装 CUDA 工具包）
-cargo build --release --features cuda --no-default-features
-
-# 仅使用 CPU 构建
-cargo build --release --no-default-features
+cargo build --release --features cuda
 ```
 
 编译后的二进制文件位于 `target/release/autosub`。
