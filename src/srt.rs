@@ -193,6 +193,39 @@ impl Subtitle {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Merge consecutive entries with the same text content.
+    /// Two entries are considered consecutive if the gap between them is less than `max_gap` seconds.
+    pub fn merge_consecutive(&mut self, max_gap: f64) {
+        if self.entries.len() < 2 {
+            return;
+        }
+
+        let mut merged = Vec::with_capacity(self.entries.len());
+        let mut current = self.entries[0].clone();
+
+        for next in self.entries.iter().skip(1) {
+            // Check if entries have same text and are consecutive (gap <= max_gap)
+            let gap = next.start - current.end;
+            if next.text == current.text && gap <= max_gap && gap >= 0.0 {
+                // Extend current entry to include next
+                current.end = next.end;
+            } else {
+                // Push current and start new
+                merged.push(current);
+                current = next.clone();
+            }
+        }
+        // Push the last entry
+        merged.push(current);
+
+        // Re-index entries
+        for (i, entry) in merged.iter_mut().enumerate() {
+            entry.index = i + 1;
+        }
+
+        self.entries = merged;
+    }
 }
 
 impl fmt::Display for Subtitle {
@@ -204,34 +237,61 @@ impl fmt::Display for Subtitle {
     }
 }
 
-/// Streaming SRT writer that flushes after each entry
+/// Streaming SRT writer that merges consecutive entries with same text before writing
 pub struct SrtWriter<W: Write> {
     writer: BufWriter<W>,
     index: usize,
+    /// Buffered entry waiting to be written (may be merged with next entry)
+    pending: Option<(f64, f64, String)>,
+    /// Maximum gap in seconds to consider entries consecutive
+    max_gap: f64,
 }
 
 impl<W: Write> SrtWriter<W> {
-    /// Create a new SRT writer
+    /// Create a new SRT writer with default max_gap of 0.1 seconds
     pub fn new(writer: W) -> Self {
         Self {
             writer: BufWriter::new(writer),
             index: 0,
+            pending: None,
+            max_gap: 0.1,
         }
     }
 
-    /// Write a single subtitle entry and flush immediately
+    /// Write a single subtitle entry, merging with pending entry if consecutive and same text
     pub fn write_entry(&mut self, start: f64, end: f64, text: &str) -> Result<()> {
-        self.index += 1;
-        writeln!(self.writer, "{}", self.index)?;
-        writeln!(
-            self.writer,
-            "{} --> {}",
-            SubtitleEntry::format_timestamp(start),
-            SubtitleEntry::format_timestamp(end)
-        )?;
-        writeln!(self.writer, "{}", text)?;
-        writeln!(self.writer)?;
-        self.writer.flush()?;
+        if let Some((pending_start, pending_end, ref pending_text)) = self.pending {
+            let gap = start - pending_end;
+            // Check if entries should be merged (same text and consecutive)
+            if pending_text == text && gap <= self.max_gap && gap >= 0.0 {
+                // Merge: extend pending entry's end time
+                self.pending = Some((pending_start, end, pending_text.clone()));
+                return Ok(());
+            } else {
+                // Not mergeable: flush pending entry first
+                self.flush_pending()?;
+            }
+        }
+        // Buffer the new entry
+        self.pending = Some((start, end, text.to_string()));
+        Ok(())
+    }
+
+    /// Flush the pending entry to the writer
+    fn flush_pending(&mut self) -> Result<()> {
+        if let Some((start, end, text)) = self.pending.take() {
+            self.index += 1;
+            writeln!(self.writer, "{}", self.index)?;
+            writeln!(
+                self.writer,
+                "{} --> {}",
+                SubtitleEntry::format_timestamp(start),
+                SubtitleEntry::format_timestamp(end)
+            )?;
+            writeln!(self.writer, "{}", text)?;
+            writeln!(self.writer)?;
+            self.writer.flush()?;
+        }
         Ok(())
     }
 
@@ -240,8 +300,9 @@ impl<W: Write> SrtWriter<W> {
         self.index
     }
 
-    /// Finish writing and return the inner writer
+    /// Finish writing, flushing any pending entry, and return the inner writer
     pub fn finish(mut self) -> Result<W> {
+        self.flush_pending()?;
         self.writer.flush()?;
         self.writer
             .into_inner()
@@ -290,5 +351,85 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed.entries[0].text, "First line");
         assert_eq!(parsed.entries[1].text, "Second line\nwith newline");
+    }
+
+    #[test]
+    fn test_srt_writer_merges_consecutive_entries() {
+        let mut buffer = Vec::new();
+        {
+            let mut writer = SrtWriter::new(&mut buffer);
+            // Three consecutive entries with same text should merge into one
+            writer.write_entry(0.0, 1.0, "Hello").unwrap();
+            writer.write_entry(1.0, 2.0, "Hello").unwrap();
+            writer.write_entry(2.0, 3.0, "Hello").unwrap();
+            // Different text should not merge
+            writer.write_entry(3.0, 4.0, "World").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let parsed = Subtitle::from_reader(buffer.as_slice()).unwrap();
+        assert_eq!(parsed.len(), 2);
+        // First entry should span 0.0 to 3.0 (merged)
+        assert_eq!(parsed.entries[0].text, "Hello");
+        assert!((parsed.entries[0].start - 0.0).abs() < 0.001);
+        assert!((parsed.entries[0].end - 3.0).abs() < 0.001);
+        // Second entry should be "World"
+        assert_eq!(parsed.entries[1].text, "World");
+        assert!((parsed.entries[1].start - 3.0).abs() < 0.001);
+        assert!((parsed.entries[1].end - 4.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_srt_writer_does_not_merge_with_gap() {
+        let mut buffer = Vec::new();
+        {
+            let mut writer = SrtWriter::new(&mut buffer);
+            // Entries with gap > 0.1s should not merge
+            writer.write_entry(0.0, 1.0, "Hello").unwrap();
+            writer.write_entry(1.2, 2.0, "Hello").unwrap(); // 0.2s gap
+            writer.finish().unwrap();
+        }
+
+        let parsed = Subtitle::from_reader(buffer.as_slice()).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed.entries[0].text, "Hello");
+        assert_eq!(parsed.entries[1].text, "Hello");
+    }
+
+    #[test]
+    fn test_srt_writer_does_not_merge_different_text() {
+        let mut buffer = Vec::new();
+        {
+            let mut writer = SrtWriter::new(&mut buffer);
+            // Consecutive entries with different text should not merge
+            writer.write_entry(0.0, 1.0, "Hello").unwrap();
+            writer.write_entry(1.0, 2.0, "World").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let parsed = Subtitle::from_reader(buffer.as_slice()).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed.entries[0].text, "Hello");
+        assert_eq!(parsed.entries[1].text, "World");
+    }
+
+    #[test]
+    fn test_merge_consecutive() {
+        let mut subtitle = Subtitle::new();
+        subtitle.push(0.0, 1.0, "Hello");
+        subtitle.push(1.0, 2.0, "Hello");
+        subtitle.push(2.0, 3.0, "Hello");
+        subtitle.push(3.0, 4.0, "World");
+        subtitle.push(4.0, 5.0, "World");
+
+        subtitle.merge_consecutive(0.1);
+
+        assert_eq!(subtitle.len(), 2);
+        assert_eq!(subtitle.entries[0].text, "Hello");
+        assert!((subtitle.entries[0].start - 0.0).abs() < 0.001);
+        assert!((subtitle.entries[0].end - 3.0).abs() < 0.001);
+        assert_eq!(subtitle.entries[1].text, "World");
+        assert!((subtitle.entries[1].start - 3.0).abs() < 0.001);
+        assert!((subtitle.entries[1].end - 5.0).abs() < 0.001);
     }
 }
