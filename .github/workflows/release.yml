@@ -59,6 +59,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
+        env:
+          CUDA_COMPUTE_CAP: "80"
         run: cargo build --release --features cuda --no-default-features
 
       - name: Create archive
@@ -117,6 +119,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
+        env:
+          CUDA_COMPUTE_CAP: "80"
         run: cargo build --release --features cuda --no-default-features
 
       - name: Create archive
