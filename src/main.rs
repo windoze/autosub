@@ -129,8 +129,11 @@ async fn run_translate_only(config: &Config) -> Result<()> {
     info!("Translate-only mode: reading existing SRT file");
 
     // Read the existing SRT file
-    let subtitle = Subtitle::from_file(&config.input)
+    let mut subtitle = Subtitle::from_file(&config.input)
         .context("Failed to read SRT file")?;
+
+    // Merge consecutive entries with same text before translation
+    subtitle.merge_consecutive(0.1);
 
     info!("Loaded {} subtitle entries", subtitle.len());
 
