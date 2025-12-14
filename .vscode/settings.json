@@ -1,0 +1,28 @@
+{
+    "cSpell.words": [
+        "autosub",
+        "bytemuck",
+        "byteorder",
+        "CUDA",
+        "deepseek",
+        "envrc",
+        "flac",
+        "gyan",
+        "ictx",
+        "indicatif",
+        "libavcodec",
+        "libavdevice",
+        "libavfilter",
+        "libavformat",
+        "libavutil",
+        "libc",
+        "libswresample",
+        "libswscale",
+        "melfilters",
+        "Ollama",
+        "pacman",
+        "qwen",
+        "resampler",
+        "serde"
+    ]
+}

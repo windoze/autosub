@@ -44,6 +44,8 @@ rubato = "0.16"
 bytemuck = "1.21"
 hound = "3.5"
 byteorder = "1.5"
+ffmpeg-next = "8"
+libc = "0.2"
 
 [features]
 default = []

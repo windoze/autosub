@@ -18,7 +18,45 @@ A CLI tool for video/audio transcription and subtitle generation using Whisper, 
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (1.70 or later)
-- [FFmpeg](https://ffmpeg.org/) (required for audio extraction)
+- FFmpeg development libraries (for linking)
+
+#### Installing FFmpeg Development Libraries
+
+**macOS (Homebrew):**
+```bash
+brew install ffmpeg
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt install libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libswresample-dev libswscale-dev pkg-config
+```
+
+**Fedora:**
+```bash
+sudo dnf install ffmpeg-devel
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S ffmpeg
+```
+
+**Windows:**
+
+Option 1: Using vcpkg
+```powershell
+vcpkg install ffmpeg:x64-windows
+set VCPKG_ROOT=C:\path\to\vcpkg
+```
+
+Option 2: Using pre-built binaries
+1. Download FFmpeg development libraries from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (choose "ffmpeg-release-full-shared")
+2. Extract and set environment variables:
+```powershell
+set FFMPEG_DIR=C:\path\to\ffmpeg
+set PATH=%FFMPEG_DIR%\bin;%PATH%
+```
 
 ### Build from source
 
@@ -30,11 +68,21 @@ cd autosub
 # Build (Metal auto-enabled on macOS, CPU on other platforms)
 cargo build --release
 
+# On macOS with Homebrew FFmpeg, you may need to specify the FFmpeg location:
+FFMPEG_DIR="/opt/homebrew/Cellar/ffmpeg/8.0.1" cargo build --release
+
 # Build with CUDA acceleration (NVIDIA GPU, requires CUDA toolkit)
 cargo build --release --features cuda
 ```
 
 The binary will be available at `target/release/autosub`.
+
+### Runtime Dependencies
+
+The compiled binary requires FFmpeg shared libraries to be available at runtime:
+
+- **macOS/Linux:** The FFmpeg libraries must be in the system library path (usually automatic if installed via package manager)
+- **Windows:** Ensure the FFmpeg DLLs are in your `PATH` or in the same directory as the executable
 
 ## Usage
 

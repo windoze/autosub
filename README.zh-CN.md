@@ -18,7 +18,45 @@
 ### 前置要求
 
 - [Rust](https://rustup.rs/)（1.70 或更高版本）
-- [FFmpeg](https://ffmpeg.org/)（用于音频提取）
+- FFmpeg 开发库（用于链接）
+
+#### 安装 FFmpeg 开发库
+
+**macOS (Homebrew):**
+```bash
+brew install ffmpeg
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt install libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libswresample-dev libswscale-dev pkg-config
+```
+
+**Fedora:**
+```bash
+sudo dnf install ffmpeg-devel
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S ffmpeg
+```
+
+**Windows:**
+
+方法 1：使用 vcpkg
+```powershell
+vcpkg install ffmpeg:x64-windows
+set VCPKG_ROOT=C:\path\to\vcpkg
+```
+
+方法 2：使用预编译二进制文件
+1. 从 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 下载 FFmpeg 开发库（选择 "ffmpeg-release-full-shared"）
+2. 解压并设置环境变量：
+```powershell
+set FFMPEG_DIR=C:\path\to\ffmpeg
+set PATH=%FFMPEG_DIR%\bin;%PATH%
+```
 
 ### 从源码构建
 
@@ -30,11 +68,21 @@ cd autosub
 # 构建（macOS 自动启用 Metal，其他平台使用 CPU）
 cargo build --release
 
+# 在 macOS 上使用 Homebrew 安装的 FFmpeg 时，可能需要指定 FFmpeg 路径：
+FFMPEG_DIR="/opt/homebrew/Cellar/ffmpeg/8.0.1" cargo build --release
+
 # 使用 CUDA 加速构建（NVIDIA GPU，需要安装 CUDA 工具包）
 cargo build --release --features cuda
 ```
 
 编译后的二进制文件位于 `target/release/autosub`。
+
+### 运行时依赖
+
+编译后的二进制文件在运行时需要 FFmpeg 共享库：
+
+- **macOS/Linux:** FFmpeg 库必须在系统库路径中（通过包管理器安装通常会自动配置）
+- **Windows:** 确保 FFmpeg DLL 文件在 `PATH` 环境变量中或与可执行文件在同一目录
 
 ## 使用方法
 

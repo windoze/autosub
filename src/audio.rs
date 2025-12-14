@@ -1,9 +1,10 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use tracing::info;
+
+extern crate ffmpeg_next as ffmpeg;
 
 pub const WHISPER_SAMPLE_RATE: u32 = 16000;
 
@@ -106,24 +107,27 @@ fn is_process_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
         // Use kill with signal 0 to check if process exists
-        // This is safe and doesn't actually send a signal
-        Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
+        // This doesn't actually send a signal, just checks existence
+        unsafe { libc::kill(pid as i32, 0) == 0 }
     }
     #[cfg(not(unix))]
     {
-        // On Windows, check if the process exists using tasklist
-        Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
-            .output()
-            .map(|output| {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                stdout.contains(&pid.to_string())
-            })
-            .unwrap_or(false)
+        // On Windows, use OpenProcess to check if process exists
+        use std::ptr::null_mut;
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+            fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        }
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                false
+            } else {
+                CloseHandle(handle);
+                true
+            }
+        }
     }
 }
 
@@ -132,7 +136,7 @@ fn is_process_running(pid: u32) -> bool {
 ///
 /// Works with both video files (extracts audio track) and audio files (converts format).
 /// The returned `ExtractedAudio` handle will automatically clean up the temp file when dropped.
-/// Uses FFmpeg command-line tool for extraction (must be installed on system).
+/// Uses ffmpeg-next crate for extraction (links against system FFmpeg libraries).
 pub fn extract_audio(input: &Path) -> Result<ExtractedAudio> {
     if is_audio_file(input) {
         info!("Converting audio to 16kHz mono WAV: {}", input.display());
@@ -144,37 +148,111 @@ pub fn extract_audio(input: &Path) -> Result<ExtractedAudio> {
     let temp_dir = std::env::temp_dir();
     let temp_wav = temp_dir.join(format!("autosub_{}.wav", std::process::id()));
 
-    // Use FFmpeg to extract and convert audio to 16kHz mono WAV
-    let output = Command::new("ffmpeg")
-        .args([
-            "-y",                                      // Overwrite output
-            "-i", input.to_str().context("Invalid input path")?,
-            "-vn",                                     // No video
-            "-acodec", "pcm_s16le",                    // 16-bit PCM
-            "-ar", &WHISPER_SAMPLE_RATE.to_string(),   // 16kHz
-            "-ac", "1",                                // Mono
-            temp_wav.to_str().context("Invalid temp path")?,
-        ])
-        .output()
-        .context("Failed to execute FFmpeg. Is it installed?")?;
+    // Initialize ffmpeg (safe to call multiple times)
+    ffmpeg::init().context("Failed to initialize FFmpeg")?;
 
-    if !output.status.success() {
-        // Clean up any partial temp file on failure
-        let _ = std::fs::remove_file(&temp_wav);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("FFmpeg failed: {}", stderr);
+    // Open input file
+    let mut ictx = ffmpeg::format::input(input)
+        .context("Failed to open input file with FFmpeg")?;
+
+    // Find the best audio stream
+    let audio_stream_index = ictx
+        .streams()
+        .best(ffmpeg::media::Type::Audio)
+        .context("No audio stream found in input file")?
+        .index();
+
+    let audio_stream = ictx.stream(audio_stream_index).unwrap();
+    let audio_params = audio_stream.parameters();
+
+    // Create decoder for the audio stream
+    let decoder_context = ffmpeg::codec::context::Context::from_parameters(audio_params)
+        .context("Failed to create decoder context")?;
+    let mut decoder = decoder_context
+        .decoder()
+        .audio()
+        .context("Failed to create audio decoder")?;
+
+    // Set up resampler to convert to 16kHz mono s16
+    let mut resampler = ffmpeg::software::resampling::context::Context::get(
+        decoder.format(),
+        decoder.channel_layout(),
+        decoder.rate(),
+        ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed),
+        ffmpeg::ChannelLayout::MONO,
+        WHISPER_SAMPLE_RATE,
+    )
+    .context("Failed to create audio resampler")?;
+
+    // Collect all audio samples
+    let mut all_samples: Vec<i16> = Vec::new();
+
+    // Process packets
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == audio_stream_index {
+            decoder.send_packet(&packet).ok();
+
+            let mut decoded_frame = ffmpeg::frame::Audio::empty();
+            while decoder.receive_frame(&mut decoded_frame).is_ok() {
+                // Resample the frame
+                let mut resampled_frame = ffmpeg::frame::Audio::empty();
+                resampler
+                    .run(&decoded_frame, &mut resampled_frame)
+                    .context("Failed to resample audio frame")?;
+
+                // Extract samples from the resampled frame
+                if resampled_frame.samples() > 0 {
+                    let data = resampled_frame.data(0);
+                    let samples: &[i16] = bytemuck::cast_slice(data);
+                    all_samples.extend_from_slice(&samples[..resampled_frame.samples()]);
+                }
+            }
+        }
     }
 
-    // Get file info to calculate duration
-    let metadata = std::fs::metadata(&temp_wav)
-        .context("Failed to read extracted audio file")?;
-    let file_size = metadata.len();
+    // Flush the decoder
+    decoder.send_eof().ok();
+    let mut decoded_frame = ffmpeg::frame::Audio::empty();
+    while decoder.receive_frame(&mut decoded_frame).is_ok() {
+        let mut resampled_frame = ffmpeg::frame::Audio::empty();
+        if resampler.run(&decoded_frame, &mut resampled_frame).is_ok() && resampled_frame.samples() > 0 {
+            let data = resampled_frame.data(0);
+            let samples: &[i16] = bytemuck::cast_slice(data);
+            all_samples.extend_from_slice(&samples[..resampled_frame.samples()]);
+        }
+    }
 
-    // Calculate duration: file_size / (sample_rate * bytes_per_sample * channels)
-    // For 16-bit mono PCM: bytes_per_sample = 2, channels = 1
-    // WAV header is typically 44 bytes
-    let data_size = file_size.saturating_sub(44);
-    let duration_secs = data_size as f64 / (WHISPER_SAMPLE_RATE as f64 * 2.0);
+    // Flush the resampler (get any remaining samples)
+    loop {
+        let mut resampled_frame = ffmpeg::frame::Audio::empty();
+        match resampler.flush(&mut resampled_frame) {
+            Ok(_) if resampled_frame.samples() > 0 => {
+                let data = resampled_frame.data(0);
+                let samples: &[i16] = bytemuck::cast_slice(data);
+                all_samples.extend_from_slice(&samples[..resampled_frame.samples()]);
+            }
+            _ => break,
+        }
+    }
+
+    // Write to WAV file using hound
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: WHISPER_SAMPLE_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut writer = hound::WavWriter::create(&temp_wav, spec)
+        .context("Failed to create output WAV file")?;
+
+    for sample in &all_samples {
+        writer.write_sample(*sample).context("Failed to write audio sample")?;
+    }
+
+    writer.finalize().context("Failed to finalize WAV file")?;
+
+    let duration_secs = all_samples.len() as f64 / WHISPER_SAMPLE_RATE as f64;
 
     info!(
         "Extracted audio to temp file: {} ({:.2} seconds)",
@@ -305,29 +383,14 @@ impl Iterator for AudioChunkReader {
     }
 }
 
-/// Check if FFmpeg is available on the system
-pub fn check_ffmpeg() -> Result<()> {
-    let output = Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .context("FFmpeg not found. Please install FFmpeg to use this tool.")?;
-
-    if !output.status.success() {
-        anyhow::bail!("FFmpeg check failed");
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_check_ffmpeg() {
-        // This test will only pass if ffmpeg is installed
-        let result = check_ffmpeg();
-        // Just check it doesn't panic, actual availability depends on system
-        let _ = result;
+    fn test_ffmpeg_init() {
+        // Test that ffmpeg-next initializes successfully
+        let result = ffmpeg::init();
+        assert!(result.is_ok(), "FFmpeg should initialize successfully");
     }
 }

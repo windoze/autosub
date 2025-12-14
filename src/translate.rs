@@ -24,6 +24,7 @@ fn to_llm_backend(provider: LlmProvider) -> LLMBackend {
 }
 
 /// Translate subtitles using an LLM provider and stream to output file
+#[allow(clippy::too_many_arguments)]
 pub async fn translate_subtitles_to_file(
     subtitle: &Subtitle,
     output_path: &Path,
@@ -51,6 +52,7 @@ pub async fn translate_subtitles_to_file(
 }
 
 /// Translate subtitles using an LLM provider, streaming output to writer
+#[allow(clippy::too_many_arguments)]
 pub async fn translate_subtitles_to_writer<W: Write>(
     subtitle: &Subtitle,
     writer: &mut SrtWriter<W>,

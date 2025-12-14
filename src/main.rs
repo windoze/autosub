@@ -7,7 +7,7 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use autosub::{
-    audio::{check_ffmpeg, cleanup_orphaned_temp_files, extract_audio, is_audio_file},
+    audio::{cleanup_orphaned_temp_files, extract_audio, is_audio_file},
     config::Config,
     srt::Subtitle,
     translate::translate_subtitles_to_file,
@@ -71,9 +71,6 @@ async fn run(mut config: Config) -> Result<()> {
     if config.translate_only {
         return run_translate_only(&config).await;
     }
-
-    // Check for FFmpeg (needed for audio extraction/conversion)
-    check_ffmpeg().context("FFmpeg is required but not found")?;
 
     // Step 1: Extract/convert audio to temp file
     let is_audio = is_audio_file(&config.input);
