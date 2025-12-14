@@ -51,7 +51,7 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.29
         id: cuda-toolkit
         with:
-          cuda: '12.6.3'
+          cuda: '12.4.1'
           method: 'local'
 
       - name: Install Rust
@@ -85,7 +85,7 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.29
         id: cuda-toolkit
         with:
-          cuda: '12.6.3'
+          cuda: '12.4.1'
           method: 'local'
 
       - name: Install Rust
