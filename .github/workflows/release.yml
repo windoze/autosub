@@ -52,7 +52,9 @@ jobs:
         id: cuda-toolkit
         with:
           cuda: '12.4.1'
-          method: 'local'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart", "nvrtc"]'
+          non-cuda-sub-packages: '["libcublas", "libcurand"]'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
