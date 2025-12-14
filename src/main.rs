@@ -44,13 +44,28 @@ fn main() -> ExitCode {
     }
 }
 
-async fn run(config: Config) -> Result<()> {
+async fn run(mut config: Config) -> Result<()> {
     // Validate input file
     if !config.input.exists() {
         anyhow::bail!("Input file does not exist: {}", config.input.display());
     }
 
     info!("Processing: {}", config.input.display());
+
+    // Auto-detect SRT files and enable translate-only mode
+    if !config.translate_only {
+        if let Some(ext) = config.input.extension() {
+            if ext.eq_ignore_ascii_case("srt") {
+                if config.translate.is_none() {
+                    anyhow::bail!(
+                        "Input is an SRT file. Please specify target language with --translate <LANG>"
+                    );
+                }
+                info!("Detected SRT file, enabling translate-only mode");
+                config.translate_only = true;
+            }
+        }
+    }
 
     // Handle translate-only mode
     if config.translate_only {
