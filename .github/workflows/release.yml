@@ -40,7 +40,7 @@ jobs:
           name: autosub-macos-arm64
           path: autosub-macos-arm64.tar.gz
 
-  build-linux:
+  build-linux-cuda:
     name: Build Linux (CUDA)
     runs-on: ubuntu-latest
     steps:
@@ -48,10 +48,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@v0.2.17
+        uses: Jimver/cuda-toolkit@v0.2.29
         id: cuda-toolkit
         with:
-          cuda: '12.4.0'
+          cuda: '12.6.3'
           method: 'network'
           sub-packages: '["nvcc", "cudart"]'
 
@@ -60,6 +60,31 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --features cuda --no-default-features
+
+      - name: Create archive
+        run: |
+          cd target/release
+          tar -czvf autosub-linux-x86_64-cuda.tar.gz autosub
+          mv autosub-linux-x86_64-cuda.tar.gz ../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: autosub-linux-x86_64-cuda
+          path: autosub-linux-x86_64-cuda.tar.gz
+
+  build-linux-cpu:
+    name: Build Linux (CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --no-default-features
 
       - name: Create archive
         run: |
@@ -73,7 +98,7 @@ jobs:
           name: autosub-linux-x86_64
           path: autosub-linux-x86_64.tar.gz
 
-  build-windows:
+  build-windows-cuda:
     name: Build Windows (CUDA)
     runs-on: windows-latest
     steps:
@@ -81,10 +106,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@v0.2.17
+        uses: Jimver/cuda-toolkit@v0.2.29
         id: cuda-toolkit
         with:
-          cuda: '12.4.0'
+          cuda: '12.6.3'
           method: 'network'
           sub-packages: '["nvcc", "cudart"]'
 
@@ -93,6 +118,30 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --features cuda --no-default-features
+
+      - name: Create archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/release/autosub.exe -DestinationPath autosub-windows-x86_64-cuda.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: autosub-windows-x86_64-cuda
+          path: autosub-windows-x86_64-cuda.zip
+
+  build-windows-cpu:
+    name: Build Windows (CPU)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --no-default-features
 
       - name: Create archive
         shell: pwsh
@@ -107,7 +156,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build-macos, build-linux, build-windows]
+    needs: [build-macos, build-linux-cuda, build-linux-cpu, build-windows-cuda, build-windows-cpu]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -136,5 +185,7 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/autosub-macos-arm64/autosub-macos-arm64.tar.gz
+            artifacts/autosub-linux-x86_64-cuda/autosub-linux-x86_64-cuda.tar.gz
             artifacts/autosub-linux-x86_64/autosub-linux-x86_64.tar.gz
+            artifacts/autosub-windows-x86_64-cuda/autosub-windows-x86_64-cuda.zip
             artifacts/autosub-windows-x86_64/autosub-windows-x86_64.zip
