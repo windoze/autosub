@@ -34,6 +34,9 @@ jobs:
           cuda: '12.6.3'
           method: 'network'
 
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Setup MSYS2 for FFmpeg build
         uses: msys2/setup-msys2@v2
         with:
@@ -45,17 +48,19 @@ jobs:
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-nasm
             mingw-w64-ucrt-x86_64-clang
-            mingw-w64-ucrt-x86_64-rust
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        shell: msys2 {0}
+        shell: pwsh
         env:
           CUDA_COMPUTE_CAP: "80"
         run: |
-          # Set CUDA paths for build
-          export CUDA_PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6"
-          export PATH="$CUDA_PATH/bin:$PATH"
-          export CUDA_LIB_PATH="$CUDA_PATH/lib/x64"
+          # Add MSYS2 tools to PATH for FFmpeg build (configure, make, etc.)
+          $env:PATH = "D:\a\_temp\msys64\ucrt64\bin;D:\a\_temp\msys64\usr\bin;$env:PATH"
+          # Set CC to gcc for ffmpeg-sys-next build
+          $env:CC = "gcc"
           cargo build --release --features cuda,ffmpeg-build --no-default-features
 
       - name: Create archive
