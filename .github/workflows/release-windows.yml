@@ -53,15 +53,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        shell: pwsh
+        shell: msys2 {0}
         env:
           CUDA_COMPUTE_CAP: "80"
         run: |
-          # Add only MSYS2 ucrt64 tools to PATH for FFmpeg build
-          # Do NOT add /usr/bin as it contains 'link' that conflicts with MSVC's link.exe
-          $env:PATH = "D:\a\_temp\msys64\ucrt64\bin;$env:PATH"
-          # Set CC to gcc for ffmpeg-sys-next build
-          $env:CC = "gcc"
+          # Install Rust in MSYS2 environment
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable-x86_64-pc-windows-gnu
+          source $HOME/.cargo/env
+
+          # Build with GNU toolchain (compatible with FFmpeg and MSYS2)
+          # CUDA will still work as nvcc is in PATH from cuda-toolkit action
           cargo build --release --features cuda,ffmpeg-build --no-default-features
 
       - name: Create archive
