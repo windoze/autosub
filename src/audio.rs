@@ -146,6 +146,9 @@ pub fn extract_audio(input: &Path, progress: Option<&ProgressBar>) -> Result<Ext
     // Initialize ffmpeg (safe to call multiple times)
     ffmpeg::init().context("Failed to initialize FFmpeg")?;
 
+    // Suppress ffmpeg warnings that interfere with progress bar display
+    ffmpeg::log::set_level(ffmpeg::log::Level::Error);
+
     // Open input file
     let mut ictx = ffmpeg::format::input(input)
         .context("Failed to open input file with FFmpeg")?;
