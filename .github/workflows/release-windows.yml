@@ -43,7 +43,7 @@ jobs:
       - name: Build release binary
         env:
           CUDA_COMPUTE_CAP: "80"
-        run: cargo build --release --features cuda,ffmpeg-build --no-default-features
+        run: cargo build --release --features cuda,ffmpeg-static --no-default-features
 
       - name: Create archive
         shell: pwsh
