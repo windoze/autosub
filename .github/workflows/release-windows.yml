@@ -37,37 +37,28 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install FFmpeg
-        shell: pwsh
-        run: |
-          $ffmpegVersion = "7.1"
-          $ffmpegUrl = "https://github.com/GyanD/codexffmpeg/releases/download/$ffmpegVersion/ffmpeg-$ffmpegVersion-full_build-shared.zip"
-          $ffmpegZip = "ffmpeg.zip"
-          $ffmpegDir = "C:\ffmpeg"
-
-          Write-Host "Downloading FFmpeg $ffmpegVersion..."
-          Invoke-WebRequest -Uri $ffmpegUrl -OutFile $ffmpegZip
-
-          Write-Host "Extracting FFmpeg..."
-          Expand-Archive -Path $ffmpegZip -DestinationPath $ffmpegDir -Force
-
-          # Move contents up one level (remove version subdirectory)
-          $extractedDir = Get-ChildItem -Path $ffmpegDir -Directory | Select-Object -First 1
-          Get-ChildItem -Path $extractedDir.FullName | Move-Item -Destination $ffmpegDir -Force
-          Remove-Item -Path $extractedDir.FullName -Force
-
-          Write-Host "FFmpeg installed to $ffmpegDir"
-          Get-ChildItem -Path $ffmpegDir
-          Get-ChildItem -Path "$ffmpegDir\lib"
+      - name: Setup MSYS2 for FFmpeg build
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-clang
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
+        shell: msys2 {0}
         env:
           CUDA_COMPUTE_CAP: "80"
-          FFMPEG_DIR: C:\ffmpeg
-        run: cargo build --release --features cuda --no-default-features
+        run: |
+          export PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/bin:$PATH"
+          export CUDA_PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6"
+          cargo build --release --features cuda,ffmpeg-build --no-default-features
 
       - name: Create archive
         shell: pwsh
