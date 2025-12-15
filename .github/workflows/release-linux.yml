@@ -27,20 +27,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install FFmpeg development libraries
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libavutil-dev libavformat-dev libavfilter-dev libavdevice-dev \
-            libswresample-dev libswscale-dev libavcodec-dev libpostproc-dev \
-            pkg-config clang \
-            libasound2-dev libpulse-dev libjack-dev \
-            libxcb1-dev libxcb-shm0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libva-dev libvdpau-dev libdrm-dev \
-            libgl1-mesa-dev libcaca-dev \
-            libraw1394-dev libavc1394-dev libiec61883-dev libdc1394-dev \
-            libcdio-paranoia-dev libcdio-cdda-dev \
-            libopenal-dev libsdl2-dev
+          sudo apt-get install -y pkg-config clang nasm
 
       - name: Install CUDA toolkit
         uses: Jimver/cuda-toolkit@v0.2.29
@@ -57,7 +47,7 @@ jobs:
       - name: Build release binary
         env:
           CUDA_COMPUTE_CAP: "80"
-        run: cargo build --release --features cuda,ffmpeg-static --no-default-features
+        run: cargo build --release --features cuda,ffmpeg-build --no-default-features
 
       - name: Create archive
         run: |
