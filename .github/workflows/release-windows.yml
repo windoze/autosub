@@ -33,8 +33,6 @@ jobs:
         with:
           cuda: '12.6.3'
           method: 'network'
-          sub-packages: '["nvcc", "cudart", "nvrtc", "nvrtc-dev", "cudart-dev", "visual_studio_integration"]'
-          non-cuda-sub-packages: '["libcublas", "libcublas-dev", "libcurand", "libcurand-dev"]'
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
