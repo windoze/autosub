@@ -52,23 +52,22 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Add GNU target to Rust
+        run: rustup target add x86_64-pc-windows-gnu
+
       - name: Build release binary
         shell: msys2 {0}
         env:
           CUDA_COMPUTE_CAP: "80"
         run: |
-          # Install Rust in MSYS2 environment
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable-x86_64-pc-windows-gnu
-          source $HOME/.cargo/env
-
-          # Build with GNU toolchain (compatible with FFmpeg and MSYS2)
-          # CUDA will still work as nvcc is in PATH from cuda-toolkit action
-          cargo build --release --features cuda,ffmpeg-build --no-default-features
+          # Use Cargo from Windows path (already in PATH)
+          # Build with GNU target for FFmpeg compatibility
+          cargo build --release --target x86_64-pc-windows-gnu --features cuda,ffmpeg-build --no-default-features
 
       - name: Create archive
         shell: pwsh
         run: |
-          Compress-Archive -Path target/release/autosub.exe -DestinationPath autosub-windows-x86_64.zip
+          Compress-Archive -Path target/x86_64-pc-windows-gnu/release/autosub.exe -DestinationPath autosub-windows-x86_64.zip
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
