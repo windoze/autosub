@@ -30,7 +30,17 @@ jobs:
       - name: Install FFmpeg development libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libavutil-dev libavformat-dev libavfilter-dev libavdevice-dev libswresample-dev libswscale-dev pkg-config clang
+          sudo apt-get install -y \
+            libavutil-dev libavformat-dev libavfilter-dev libavdevice-dev \
+            libswresample-dev libswscale-dev libavcodec-dev libpostproc-dev \
+            pkg-config clang \
+            libasound2-dev libpulse-dev libjack-dev \
+            libxcb1-dev libxcb-shm0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libva-dev libvdpau-dev libdrm-dev \
+            libgl1-mesa-dev libcaca-dev \
+            libraw1394-dev libavc1394-dev libiec61883-dev libdc1394-dev \
+            libcdio-paranoia-dev libcdio-cdda-dev \
+            libopenal-dev libsdl2-dev
 
       - name: Install CUDA toolkit
         uses: Jimver/cuda-toolkit@v0.2.29
@@ -39,7 +49,7 @@ jobs:
           cuda: '12.6.3'
           method: 'network'
           sub-packages: '["nvcc", "cudart", "nvrtc", "nvrtc-dev", "cudart-dev"]'
-          non-cuda-sub-packages: '["libcublas", "libcurand"]'
+          non-cuda-sub-packages: '["libcublas", "libcublas-dev", "libcurand", "libcurand-dev"]'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
