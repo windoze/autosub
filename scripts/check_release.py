@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-Check the status of the latest release pipeline for the autosub repository.
+Check the status of the latest workflow pipeline for the autosub repository.
 Prints whether it is successful, failed, or still in progress.
-Shows error logs if the release pipeline fails.
+Shows error logs if the pipeline fails.
 
 Usage:
-    python check_release.py [--token GITHUB_TOKEN]
+    python check_release.py [PIPELINE_NAME] [--token GITHUB_TOKEN]
+
+    PIPELINE_NAME: Name of the workflow to check (default: "Release")
+                   Examples: "Release", "Build", "Test", "release-linux.yml"
 
     The GitHub token can also be set via the GITHUB_TOKEN or GITHUB_API_KEY
     environment variables. A token is required to access workflow run logs.
@@ -22,7 +25,7 @@ from io import BytesIO
 
 REPO_OWNER = "windoze"
 REPO_NAME = "autosub"
-WORKFLOW_NAME = "Release"
+DEFAULT_WORKFLOW = "Release"
 API_BASE = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}"
 
 
@@ -55,27 +58,52 @@ def api_request(url: str, token: str | None) -> dict:
         sys.exit(1)
 
 
-def get_workflow_id(token: str | None) -> int:
-    """Get the workflow ID for the Release workflow."""
+def get_workflow_id(workflow_name: str, token: str | None) -> tuple[int, str]:
+    """Get the workflow ID for the specified workflow.
+
+    Args:
+        workflow_name: Name of the workflow (e.g., "Release") or filename (e.g., "release.yml")
+        token: GitHub API token
+
+    Returns:
+        Tuple of (workflow_id, workflow_display_name)
+    """
     url = f"{API_BASE}/actions/workflows"
     data = api_request(url, token)
 
+    # Try exact match by name first
     for workflow in data.get("workflows", []):
-        if workflow["name"] == WORKFLOW_NAME:
-            return workflow["id"]
+        if workflow["name"] == workflow_name:
+            return workflow["id"], workflow["name"]
 
-    print(f"Error: Workflow '{WORKFLOW_NAME}' not found")
+    # Try match by filename (with or without .yml extension)
+    search_name = workflow_name if workflow_name.endswith(".yml") else f"{workflow_name}.yml"
+    for workflow in data.get("workflows", []):
+        if workflow["path"].endswith(f"/{search_name}"):
+            return workflow["id"], workflow["name"]
+
+    # Try case-insensitive partial match
+    workflow_name_lower = workflow_name.lower()
+    for workflow in data.get("workflows", []):
+        if workflow_name_lower in workflow["name"].lower():
+            return workflow["id"], workflow["name"]
+
+    # List available workflows if not found
+    print(f"Error: Workflow '{workflow_name}' not found")
+    print("\nAvailable workflows:")
+    for workflow in data.get("workflows", []):
+        print(f"  - {workflow['name']} ({workflow['path']})")
     sys.exit(1)
 
 
-def get_latest_run(workflow_id: int, token: str | None) -> dict:
+def get_latest_run(workflow_id: int, workflow_name: str, token: str | None) -> dict:
     """Get the latest workflow run."""
     url = f"{API_BASE}/actions/workflows/{workflow_id}/runs?per_page=1"
     data = api_request(url, token)
 
     runs = data.get("workflow_runs", [])
     if not runs:
-        print("No workflow runs found for the Release workflow.")
+        print(f"No workflow runs found for the '{workflow_name}' workflow.")
         sys.exit(0)
 
     return runs[0]
@@ -194,7 +222,14 @@ def format_duration(start: str, end: str | None) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Check the status of the latest release pipeline"
+        description="Check the status of a GitHub Actions workflow pipeline"
+    )
+    parser.add_argument(
+        "pipeline",
+        nargs="?",
+        default=DEFAULT_WORKFLOW,
+        help=f"Name of the workflow to check (default: '{DEFAULT_WORKFLOW}'). "
+             "Can be workflow name (e.g., 'Release') or filename (e.g., 'release-linux.yml')",
     )
     parser.add_argument(
         "--token",
@@ -203,13 +238,13 @@ def main():
     )
     args = parser.parse_args()
 
-    print(f"Checking release pipeline for {REPO_OWNER}/{REPO_NAME}...\n")
-
     # Get workflow ID
-    workflow_id = get_workflow_id(args.token)
+    workflow_id, workflow_name = get_workflow_id(args.pipeline, args.token)
+
+    print(f"Checking '{workflow_name}' pipeline for {REPO_OWNER}/{REPO_NAME}...\n")
 
     # Get latest run
-    run = get_latest_run(workflow_id, args.token)
+    run = get_latest_run(workflow_id, workflow_name, args.token)
 
     run_id = run["id"]
     status = run["status"]
