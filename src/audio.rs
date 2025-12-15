@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use indicatif::ProgressBar;
 use tracing::info;
 
 extern crate ffmpeg_next as ffmpeg;
@@ -136,7 +137,8 @@ fn is_process_running(pid: u32) -> bool {
 /// Works with both video files (extracts audio track) and audio files (converts format).
 /// The returned `ExtractedAudio` handle will automatically clean up the temp file when dropped.
 /// Uses ffmpeg-next crate for extraction (links against system FFmpeg libraries).
-pub fn extract_audio(input: &Path) -> Result<ExtractedAudio> {
+/// If a progress bar is provided, it will be updated during extraction.
+pub fn extract_audio(input: &Path, progress: Option<&ProgressBar>) -> Result<ExtractedAudio> {
     // Create a temporary WAV file
     let temp_dir = std::env::temp_dir();
     let temp_wav = temp_dir.join(format!("autosub_{}.wav", std::process::id()));
@@ -148,6 +150,14 @@ pub fn extract_audio(input: &Path) -> Result<ExtractedAudio> {
     let mut ictx = ffmpeg::format::input(input)
         .context("Failed to open input file with FFmpeg")?;
 
+    // Get duration for progress tracking (in microseconds)
+    let duration_us = ictx.duration();
+    if let Some(pb) = progress {
+        if duration_us > 0 {
+            pb.set_length(duration_us as u64);
+        }
+    }
+
     // Find the best audio stream
     let audio_stream_index = ictx
         .streams()
@@ -156,6 +166,7 @@ pub fn extract_audio(input: &Path) -> Result<ExtractedAudio> {
         .index();
 
     let audio_stream = ictx.stream(audio_stream_index).unwrap();
+    let time_base = audio_stream.time_base();
     let audio_params = audio_stream.parameters();
 
     // Create decoder for the audio stream
@@ -183,6 +194,15 @@ pub fn extract_audio(input: &Path) -> Result<ExtractedAudio> {
     // Process packets
     for (stream, packet) in ictx.packets() {
         if stream.index() == audio_stream_index {
+            // Update progress based on packet timestamp
+            if let (Some(pb), Some(pts)) = (progress, packet.pts()) {
+                // Convert pts to microseconds
+                let time_us = pts * 1_000_000 * time_base.numerator() as i64 / time_base.denominator() as i64;
+                if time_us > 0 {
+                    pb.set_position(time_us as u64);
+                }
+            }
+
             decoder.send_packet(&packet).ok();
 
             let mut decoded_frame = ffmpeg::frame::Audio::empty();

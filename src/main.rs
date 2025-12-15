@@ -74,20 +74,20 @@ async fn run(mut config: Config) -> Result<()> {
 
     // Step 1: Extract/convert audio to temp file
     let is_audio = is_audio_file(&config.input);
-    let spinner_msg = if is_audio {
-        "Converting audio..."
+    let progress_msg = if is_audio {
+        "Converting audio"
     } else {
-        "Extracting audio..."
+        "Extracting audio"
     };
-    let spinner = create_spinner(spinner_msg);
-    let extracted_audio = extract_audio(&config.input)
+    let progress = create_progress_bar(progress_msg);
+    let extracted_audio = extract_audio(&config.input, Some(&progress))
         .context("Failed to process audio from input file")?;
     let done_msg = if is_audio {
         format!("Audio converted ({:.2} seconds)", extracted_audio.duration_secs())
     } else {
         format!("Audio extracted ({:.2} seconds)", extracted_audio.duration_secs())
     };
-    spinner.finish_with_message(done_msg);
+    progress.finish_with_message(done_msg);
 
     // Step 2: Transcribe with Whisper using streaming, writing SRT as we go
     let output_path = config.output_path();
@@ -175,18 +175,6 @@ async fn translate_subtitle(subtitle: &Subtitle, target_lang: &str, config: &Con
     info!("Saved translated subtitles to: {}", translated_path.display());
 
     Ok(())
-}
-
-fn create_spinner(message: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap(),
-    );
-    pb.set_message(message.to_string());
-    pb.enable_steady_tick(std::time::Duration::from_millis(100));
-    pb
 }
 
 fn create_progress_bar(message: &str) -> ProgressBar {
