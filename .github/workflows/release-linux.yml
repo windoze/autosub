@@ -1,0 +1,57 @@
+name: Release Linux
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    name: Build Linux (CUDA)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.29
+        id: cuda-toolkit
+        with:
+          cuda: '13.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart", "nvrtc", "nvrtc-dev", "nvcc", "cudart-dev"]'
+          non-cuda-sub-packages: '["libcublas", "libcurand"]'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        env:
+          CUDA_COMPUTE_CAP: "80"
+        run: cargo build --release --features cuda --no-default-features
+
+      - name: Create archive
+        run: |
+          cd target/release
+          tar -czvf autosub-linux-x86_64.tar.gz autosub
+          mv autosub-linux-x86_64.tar.gz ../..
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: autosub-linux-x86_64.tar.gz
