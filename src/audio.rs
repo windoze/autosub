@@ -265,11 +265,6 @@ pub fn extract_audio(input: &Path, progress: Option<&ProgressBar>) -> Result<Ext
 
     writer.finalize().context("Failed to finalize WAV file")?;
 
-    // Ensure progress bar reaches 100%
-    if let Some(pb) = progress {
-        pb.set_position(pb.length().unwrap_or(100));
-    }
-
     let duration_secs = all_samples.len() as f64 / WHISPER_SAMPLE_RATE as f64;
 
     Ok(ExtractedAudio {
