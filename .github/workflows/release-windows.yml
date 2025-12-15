@@ -18,7 +18,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-windows:
+  build-windows-cuda:
     name: Build Windows (CUDA)
     runs-on: windows-latest
     permissions:
@@ -73,6 +73,70 @@ jobs:
           Get-ChildItem -Path $env:FFMPEG_DIR -Depth 1 | Select-Object FullName
           # Build with CUDA support, linking against prebuilt FFmpeg
           cargo build --release --features cuda --no-default-features
+
+      - name: Create archive
+        shell: pwsh
+        run: |
+          # Create staging directory with exe and required DLLs
+          New-Item -ItemType Directory -Force -Path staging
+          Copy-Item target/release/autosub.exe staging/
+          # Copy FFmpeg DLLs needed at runtime
+          Copy-Item "$env:FFMPEG_DIR\bin\*.dll" staging/
+          # Create archive
+          Compress-Archive -Path staging/* -DestinationPath autosub-windows-x86_64-cuda.zip
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: autosub-windows-x86_64-cuda.zip
+
+  build-windows-cpu:
+    name: Build Windows (CPU)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Download prebuilt FFmpeg
+        shell: pwsh
+        run: |
+          # Download FFmpeg shared build with dev files (headers + import libs)
+          $ffmpegUrl = "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build-shared.7z"
+          $ffmpegArchive = "ffmpeg.7z"
+          Write-Host "Downloading FFmpeg from $ffmpegUrl"
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile $ffmpegArchive
+          # Extract using 7z (available on GitHub runners)
+          7z x $ffmpegArchive -oC:\ffmpeg
+          # Find the extracted directory name (e.g., ffmpeg-7.1-full_build-shared)
+          $extractedDir = Get-ChildItem -Path C:\ffmpeg -Directory | Select-Object -First 1
+          Write-Host "FFmpeg extracted to: $($extractedDir.FullName)"
+          # Show structure for debugging
+          Get-ChildItem -Path $extractedDir.FullName -Depth 1 | Select-Object FullName
+          # Set environment variable for subsequent steps
+          echo "FFMPEG_DIR=$($extractedDir.FullName)" >> $env:GITHUB_ENV
+
+      - name: Install LLVM for bindgen
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "17"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        shell: pwsh
+        run: |
+          Write-Host "FFMPEG_DIR: $env:FFMPEG_DIR"
+          # Verify FFmpeg structure
+          Get-ChildItem -Path $env:FFMPEG_DIR -Depth 1 | Select-Object FullName
+          # Build CPU-only version, linking against prebuilt FFmpeg
+          cargo build --release --no-default-features
 
       - name: Create archive
         shell: pwsh
