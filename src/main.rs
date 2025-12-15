@@ -87,11 +87,7 @@ async fn run(mut config: Config) -> Result<()> {
     } else {
         format!("Audio extracted ({:.2} seconds)", extracted_audio.duration_secs())
     };
-    // Set position to length to ensure bar is fully filled before finishing
-    if let Some(len) = progress.length() {
-        progress.set_position(len);
-    }
-    progress.finish();
+    progress.finish_and_clear();
     println!("{}", done_msg);
 
     // Step 2: Transcribe with Whisper using streaming, writing SRT as we go
