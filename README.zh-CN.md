@@ -77,12 +77,61 @@ cargo build --release --features cuda
 
 编译后的二进制文件位于 `target/release/autosub`。
 
+### FFmpeg 静态链接（无运行时依赖）
+
+默认情况下，autosub 动态链接 FFmpeg 共享库，运行时需要系统安装 FFmpeg。你可以使用静态链接构建，生成独立的可执行文件。
+
+**macOS:**
+
+在 macOS 上，Homebrew 安装的 FFmpeg 有很多依赖（gnutls、librist、x264 等），使静态链接变得复杂。推荐使用 `ffmpeg-build` 特性从源码构建精简版 FFmpeg：
+
+```bash
+# 从源码构建 FFmpeg（macOS 静态构建推荐方式）
+# 编译时间较长，但生成完全独立的可执行文件
+cargo build --release --features ffmpeg-build
+```
+
+**Ubuntu/Debian:**
+
+```bash
+# 安装 FFmpeg 静态库
+sudo apt install libavcodec-dev libavformat-dev libavutil-dev \
+  libavfilter-dev libswresample-dev libswscale-dev pkg-config
+
+# 使用静态链接构建
+cargo build --release --features ffmpeg-static
+```
+
+**Windows:**
+
+在 Windows 上，使用 `ffmpeg-build` 特性从源码构建 FFmpeg：
+
+```powershell
+# 需要：Visual Studio 构建工具、MSYS2/MinGW 或类似的 C 编译器工具链
+cargo build --release --features ffmpeg-build
+```
+
+或者使用 vcpkg 安装静态库：
+
+```powershell
+# 通过 vcpkg 安装 FFmpeg 静态库
+vcpkg install ffmpeg:x64-windows-static
+
+# 设置环境变量并构建
+set VCPKG_ROOT=C:\path\to\vcpkg
+cargo build --release --features ffmpeg-static
+```
+
+**注意：** `ffmpeg-static` 特性要求所有 FFmpeg 依赖库都以静态库形式存在。如果遇到链接器报错找不到库，请改用 `ffmpeg-build`，它会构建一个依赖更少的精简版 FFmpeg。
+
 ### 运行时依赖
 
-编译后的二进制文件在运行时需要 FFmpeg 共享库：
+**不使用**静态链接构建时，二进制文件在运行时需要 FFmpeg 共享库：
 
 - **macOS/Linux:** FFmpeg 库必须在系统库路径中（通过包管理器安装通常会自动配置）
 - **Windows:** 确保 FFmpeg DLL 文件在 `PATH` 环境变量中或与可执行文件在同一目录
+
+**使用** `ffmpeg-static` 或 `ffmpeg-build` 构建时，运行时无需安装 FFmpeg。
 
 ## 使用方法
 

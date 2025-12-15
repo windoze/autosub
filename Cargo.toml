@@ -52,6 +52,14 @@ default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
+# FFmpeg static linking - embeds FFmpeg libraries into the binary
+# This increases binary size but removes the need for system FFmpeg installation
+ffmpeg-static = ["ffmpeg-next/static"]
+
+# FFmpeg build from source - builds FFmpeg from source code during compilation
+# This provides maximum control but significantly increases compile time
+ffmpeg-build = ["ffmpeg-next/build"]
+
 # Auto-enable metal on macOS when no explicit feature is selected
 [target.'cfg(target_os = "macos")'.dependencies]
 candle-core = { version = "0.9", features = ["metal"] }

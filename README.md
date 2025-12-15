@@ -77,12 +77,61 @@ cargo build --release --features cuda
 
 The binary will be available at `target/release/autosub`.
 
+### Static FFmpeg Linking (No Runtime Dependencies)
+
+By default, autosub dynamically links against FFmpeg shared libraries, requiring them to be present at runtime. You can build with static FFmpeg linking to create a self-contained binary.
+
+**macOS:**
+
+On macOS, Homebrew's FFmpeg has many dependencies (gnutls, librist, x264, etc.) that make static linking complex. The recommended approach is to use the `ffmpeg-build` feature which builds a minimal FFmpeg from source:
+
+```bash
+# Build FFmpeg from source (recommended for static builds on macOS)
+# This takes longer but produces a fully self-contained binary
+cargo build --release --features ffmpeg-build
+```
+
+**Ubuntu/Debian:**
+
+```bash
+# Install FFmpeg static libraries
+sudo apt install libavcodec-dev libavformat-dev libavutil-dev \
+  libavfilter-dev libswresample-dev libswscale-dev pkg-config
+
+# Build with static linking
+cargo build --release --features ffmpeg-static
+```
+
+**Windows:**
+
+On Windows, use the `ffmpeg-build` feature to build FFmpeg from source:
+
+```powershell
+# Requires: Visual Studio Build Tools, MSYS2/MinGW, or similar C compiler toolchain
+cargo build --release --features ffmpeg-build
+```
+
+Alternatively, you can use vcpkg with static libraries:
+
+```powershell
+# Install FFmpeg with static linking via vcpkg
+vcpkg install ffmpeg:x64-windows-static
+
+# Set environment and build
+set VCPKG_ROOT=C:\path\to\vcpkg
+cargo build --release --features ffmpeg-static
+```
+
+**Note:** The `ffmpeg-static` feature requires all FFmpeg dependencies to be available as static libraries. If you encounter linker errors about missing libraries, use `ffmpeg-build` instead which builds a minimal FFmpeg with fewer dependencies.
+
 ### Runtime Dependencies
 
-The compiled binary requires FFmpeg shared libraries to be available at runtime:
+When built **without** static linking, the binary requires FFmpeg shared libraries at runtime:
 
 - **macOS/Linux:** The FFmpeg libraries must be in the system library path (usually automatic if installed via package manager)
 - **Windows:** Ensure the FFmpeg DLLs are in your `PATH` or in the same directory as the executable
+
+When built **with** `ffmpeg-static` or `ffmpeg-build`, no runtime FFmpeg installation is required.
 
 ## Usage
 
