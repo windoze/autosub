@@ -94,7 +94,6 @@ async fn run(mut config: Config) -> Result<()> {
     let device = config.device.to_candle_device()?;
 
     info!("Transcribing to: {}", output_path.display());
-    let progress = create_progress_bar("Transcribing");
     let subtitle = transcribe_to_file(
         extracted_audio.path(),
         &output_path,
@@ -102,7 +101,7 @@ async fn run(mut config: Config) -> Result<()> {
         Some(config.cache_dir()),
         device,
         config.language.as_deref(),
-        Some(&progress),
+        || Some(create_progress_bar("Transcribing")),
     )
     .context("Failed to transcribe audio")?;
 

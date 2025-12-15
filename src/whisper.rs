@@ -262,14 +262,18 @@ impl WhisperModel {
     /// Transcribe audio from a file and write segments to an SrtWriter as they're decoded.
     /// Each segment is flushed immediately, providing real-time output.
     /// Also returns the complete Subtitle in memory.
-    /// If a progress bar is provided, it will be updated as segments are processed.
-    pub fn transcribe_to_writer<W: Write>(
+    /// The `create_progress` callback is called after audio loading and preprocessing,
+    /// right before transcription begins. The progress bar will be updated as segments are processed.
+    pub fn transcribe_to_writer<W: Write, F>(
         &mut self,
         audio_path: &Path,
         language: Option<&str>,
         writer: &mut SrtWriter<W>,
-        progress: Option<&ProgressBar>,
-    ) -> Result<Subtitle> {
+        create_progress: F,
+    ) -> Result<Subtitle>
+    where
+        F: FnOnce() -> Option<ProgressBar>,
+    {
         // Load all audio samples
         let samples = Self::load_audio(audio_path)?;
         let duration_secs = samples.len() as f64 / SAMPLE_RATE as f64;
@@ -297,10 +301,9 @@ impl WhisperModel {
         let mut subtitle = Subtitle::new();
         let mut seek = 0;
 
-        info!("Transcribing audio...");
-
-        // Set up progress bar with total frames
-        if let Some(pb) = progress {
+        // Create progress bar now that all preprocessing is done
+        let progress = create_progress();
+        if let Some(pb) = progress.as_ref() {
             pb.set_length(content_frames as u64);
             pb.set_position(0);
         }
@@ -350,12 +353,12 @@ impl WhisperModel {
             seek += seek_advance;
 
             // Update progress bar
-            if let Some(pb) = progress {
+            if let Some(pb) = progress.as_ref() {
                 pb.set_position(seek.min(content_frames) as u64);
             }
         }
 
-        if let Some(pb) = progress {
+        if let Some(pb) = progress.as_ref() {
             pb.finish_with_message(format!("Transcribed {} segments", subtitle.len()));
         }
 
@@ -607,25 +610,29 @@ pub fn transcribe_file(
     // Use a dummy writer that discards output
     let mut buffer = Vec::new();
     let mut writer = SrtWriter::new(&mut buffer);
-    model.transcribe_to_writer(audio_path, language, &mut writer, None)
+    model.transcribe_to_writer(audio_path, language, &mut writer, || None)
 }
 
 /// Transcribe audio from a file and write directly to an SRT file.
 /// Each segment is written and flushed immediately, providing real-time output.
 /// Returns the complete Subtitle (also kept in memory).
-/// If a progress bar is provided, it will be updated during transcription.
-pub fn transcribe_to_file(
+/// The `create_progress` callback is called right before transcription begins,
+/// after model loading and audio preprocessing are complete.
+pub fn transcribe_to_file<F>(
     audio_path: &Path,
     output_path: &Path,
     model_size: WhisperModelSize,
     cache_dir: Option<PathBuf>,
     device: Device,
     language: Option<&str>,
-    progress: Option<&ProgressBar>,
-) -> Result<Subtitle> {
+    create_progress: F,
+) -> Result<Subtitle>
+where
+    F: FnOnce() -> Option<ProgressBar>,
+{
     let mut model = WhisperModel::load(model_size, cache_dir, device)?;
     let mut writer = SrtWriter::create(output_path)?;
-    let subtitle = model.transcribe_to_writer(audio_path, language, &mut writer, progress)?;
+    let subtitle = model.transcribe_to_writer(audio_path, language, &mut writer, create_progress)?;
     writer.finish()?;
     Ok(subtitle)
 }

@@ -113,7 +113,6 @@ fn is_process_running(pid: u32) -> bool {
     #[cfg(not(unix))]
     {
         // On Windows, use OpenProcess to check if process exists
-        use std::ptr::null_mut;
         const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
         extern "system" {
             fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
@@ -138,12 +137,6 @@ fn is_process_running(pid: u32) -> bool {
 /// The returned `ExtractedAudio` handle will automatically clean up the temp file when dropped.
 /// Uses ffmpeg-next crate for extraction (links against system FFmpeg libraries).
 pub fn extract_audio(input: &Path) -> Result<ExtractedAudio> {
-    if is_audio_file(input) {
-        info!("Converting audio to 16kHz mono WAV: {}", input.display());
-    } else {
-        info!("Extracting audio from: {}", input.display());
-    }
-
     // Create a temporary WAV file
     let temp_dir = std::env::temp_dir();
     let temp_wav = temp_dir.join(format!("autosub_{}.wav", std::process::id()));
@@ -253,12 +246,6 @@ pub fn extract_audio(input: &Path) -> Result<ExtractedAudio> {
     writer.finalize().context("Failed to finalize WAV file")?;
 
     let duration_secs = all_samples.len() as f64 / WHISPER_SAMPLE_RATE as f64;
-
-    info!(
-        "Extracted audio to temp file: {} ({:.2} seconds)",
-        temp_wav.display(),
-        duration_secs
-    );
 
     Ok(ExtractedAudio {
         path: temp_wav,
