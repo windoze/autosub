@@ -93,7 +93,8 @@ async fn run(mut config: Config) -> Result<()> {
     let output_path = config.output_path();
     let device = config.device.to_candle_device()?;
 
-    info!("Transcribing to: {} (streaming output)", output_path.display());
+    info!("Transcribing to: {}", output_path.display());
+    let progress = create_progress_bar("Transcribing");
     let subtitle = transcribe_to_file(
         extracted_audio.path(),
         &output_path,
@@ -101,6 +102,7 @@ async fn run(mut config: Config) -> Result<()> {
         Some(config.cache_dir()),
         device,
         config.language.as_deref(),
+        Some(&progress),
     )
     .context("Failed to transcribe audio")?;
 
@@ -182,6 +184,19 @@ fn create_spinner(message: &str) -> ProgressBar {
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
             .unwrap(),
+    );
+    pb.set_message(message.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    pb
+}
+
+fn create_progress_bar(message: &str) -> ProgressBar {
+    let pb = ProgressBar::new(100);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} {msg} [{elapsed_precise}] [{bar:40.cyan/blue}] {percent}%")
+            .unwrap()
+            .progress_chars("#>-"),
     );
     pb.set_message(message.to_string());
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
