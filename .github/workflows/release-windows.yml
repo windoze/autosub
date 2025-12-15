@@ -57,8 +57,9 @@ jobs:
         env:
           CUDA_COMPUTE_CAP: "80"
         run: |
-          # Add MSYS2 tools to PATH for FFmpeg build (configure, make, etc.)
-          $env:PATH = "D:\a\_temp\msys64\ucrt64\bin;D:\a\_temp\msys64\usr\bin;$env:PATH"
+          # Add only MSYS2 ucrt64 tools to PATH for FFmpeg build
+          # Do NOT add /usr/bin as it contains 'link' that conflicts with MSVC's link.exe
+          $env:PATH = "D:\a\_temp\msys64\ucrt64\bin;$env:PATH"
           # Set CC to gcc for ffmpeg-sys-next build
           $env:CC = "gcc"
           cargo build --release --features cuda,ffmpeg-build --no-default-features
