@@ -37,17 +37,26 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Setup MSYS2 for FFmpeg build
-        uses: msys2/setup-msys2@v2
+      - name: Download prebuilt FFmpeg
+        shell: pwsh
+        run: |
+          # Download FFmpeg shared build with dev files from official release
+          $ffmpegUrl = "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build-shared.7z"
+          $ffmpegArchive = "ffmpeg.7z"
+          Write-Host "Downloading FFmpeg from $ffmpegUrl"
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile $ffmpegArchive
+          # Extract using 7z (available on GitHub runners)
+          7z x $ffmpegArchive -oC:\ffmpeg
+          # Find the extracted directory name
+          $extractedDir = Get-ChildItem -Path C:\ffmpeg -Directory | Select-Object -First 1
+          Write-Host "FFmpeg extracted to: $($extractedDir.FullName)"
+          # Set environment variable for subsequent steps
+          echo "FFMPEG_DIR=$($extractedDir.FullName)" >> $env:GITHUB_ENV
+
+      - name: Install LLVM for bindgen
+        uses: KyleMayes/install-llvm-action@v2
         with:
-          msystem: UCRT64
-          update: true
-          path-type: inherit
-          install: >-
-            base-devel
-            mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-nasm
-            mingw-w64-ucrt-x86_64-clang
+          version: "17"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -57,17 +66,21 @@ jobs:
         env:
           CUDA_COMPUTE_CAP: "80"
         run: |
-          # Add MSYS2 ucrt64 tools to PATH for FFmpeg configure (gcc, make, etc.)
-          # Put them AFTER MSVC tools so link.exe from MSVC is found first
-          $env:PATH = "$env:PATH;D:\a\_temp\msys64\ucrt64\bin"
-          # Set CC for FFmpeg configure to use gcc
-          $env:CC = "D:\a\_temp\msys64\ucrt64\bin\gcc.exe"
-          cargo build --release --features cuda,ffmpeg-build --no-default-features
+          Write-Host "FFMPEG_DIR: $env:FFMPEG_DIR"
+          # Verify FFmpeg structure
+          Get-ChildItem -Path $env:FFMPEG_DIR -Recurse -Depth 1 | Select-Object FullName
+          cargo build --release --features cuda --no-default-features
 
       - name: Create archive
         shell: pwsh
         run: |
-          Compress-Archive -Path target/release/autosub.exe -DestinationPath autosub-windows-x86_64.zip
+          # Create staging directory
+          New-Item -ItemType Directory -Force -Path staging
+          Copy-Item target/release/autosub.exe staging/
+          # Copy FFmpeg DLLs needed at runtime
+          Copy-Item "$env:FFMPEG_DIR\bin\*.dll" staging/
+          # Create archive with exe and DLLs
+          Compress-Archive -Path staging/* -DestinationPath autosub-windows-x86_64.zip
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
