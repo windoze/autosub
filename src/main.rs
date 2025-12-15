@@ -7,11 +7,11 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use autosub::{
-    audio::{cleanup_orphaned_temp_files, extract_audio, is_audio_file},
+    audio::{cleanup_orphaned_temp_files, AudioStream},
     config::Config,
     srt::Subtitle,
     translate::translate_subtitles_to_file,
-    whisper::transcribe_to_file,
+    whisper::transcribe_stream_to_file,
 };
 
 fn main() -> ExitCode {
@@ -72,31 +72,19 @@ async fn run(mut config: Config) -> Result<()> {
         return run_translate_only(&config).await;
     }
 
-    // Step 1: Extract/convert audio to temp file
-    let is_audio = is_audio_file(&config.input);
-    let progress_msg = if is_audio {
-        "Converting audio"
-    } else {
-        "Extracting audio"
-    };
-    let progress = create_progress_bar(progress_msg);
-    let extracted_audio = extract_audio(&config.input, Some(&progress))
-        .context("Failed to process audio from input file")?;
-    let done_msg = if is_audio {
-        format!("Audio converted ({:.2} seconds)", extracted_audio.duration_secs())
-    } else {
-        format!("Audio extracted ({:.2} seconds)", extracted_audio.duration_secs())
-    };
-    progress.finish_and_clear();
-    println!("{}", done_msg);
+    // Step 1: Open audio stream (no temp file needed)
+    let audio_stream = AudioStream::open(&config.input)
+        .context("Failed to open audio stream from input file")?;
+
+    info!("Audio duration: {:.2} seconds", audio_stream.duration_secs());
 
     // Step 2: Transcribe with Whisper using streaming, writing SRT as we go
     let output_path = config.output_path();
     let device = config.device.to_candle_device()?;
 
     info!("Transcribing to: {}", output_path.display());
-    let subtitle = transcribe_to_file(
-        extracted_audio.path(),
+    let subtitle = transcribe_stream_to_file(
+        audio_stream,
         &output_path,
         config.model,
         Some(config.cache_dir()),
@@ -107,8 +95,6 @@ async fn run(mut config: Config) -> Result<()> {
     .context("Failed to transcribe audio")?;
 
     info!("Transcription complete: {} segments written to {}", subtitle.len(), output_path.display());
-
-    // The extracted_audio temp file is automatically cleaned up when it goes out of scope
 
     // Step 3: Translate if requested
     if let Some(ref target_lang) = config.translate {

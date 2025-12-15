@@ -393,6 +393,224 @@ impl Iterator for AudioChunkReader {
     }
 }
 
+/// Streaming audio reader that decodes audio directly from media files.
+/// Yields 30-second chunks as f32 samples normalized to [-1, 1].
+/// This avoids writing to a temp file and reduces memory usage.
+pub struct AudioStream {
+    ictx: ffmpeg::format::context::Input,
+    decoder: ffmpeg::decoder::Audio,
+    resampler: ffmpeg::software::resampling::Context,
+    audio_stream_index: usize,
+    time_base: ffmpeg::Rational,
+    /// Duration of each chunk in samples (30 seconds * 16000 Hz = 480,000)
+    chunk_samples: usize,
+    /// Total duration in microseconds (for progress tracking)
+    total_duration_us: i64,
+    /// Buffer for samples that haven't been yielded yet
+    sample_buffer: Vec<f32>,
+    /// Whether we've sent EOF to the decoder
+    eof_sent: bool,
+    /// Whether we've flushed the resampler
+    resampler_flushed: bool,
+    /// Current position in microseconds (for progress tracking)
+    current_position_us: i64,
+}
+
+/// Duration of each audio chunk in seconds
+pub const CHUNK_DURATION_SECS: usize = 30;
+
+impl AudioStream {
+    /// Open a media file for streaming audio decoding.
+    /// Returns an iterator that yields 30-second chunks of audio as f32 samples.
+    pub fn open(input: &Path) -> Result<Self> {
+        // Initialize ffmpeg (safe to call multiple times)
+        ffmpeg::init().context("Failed to initialize FFmpeg")?;
+
+        // Suppress ffmpeg warnings that interfere with progress bar display
+        ffmpeg::log::set_level(ffmpeg::log::Level::Error);
+
+        // Open input file
+        let ictx = ffmpeg::format::input(input)
+            .context("Failed to open input file with FFmpeg")?;
+
+        // Get duration for progress tracking (in microseconds)
+        let total_duration_us = ictx.duration();
+
+        // Find the best audio stream
+        let audio_stream_index = ictx
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .context("No audio stream found in input file")?
+            .index();
+
+        let audio_stream = ictx.stream(audio_stream_index).unwrap();
+        let time_base = audio_stream.time_base();
+        let audio_params = audio_stream.parameters();
+
+        // Create decoder for the audio stream
+        let decoder_context = ffmpeg::codec::context::Context::from_parameters(audio_params)
+            .context("Failed to create decoder context")?;
+        let decoder = decoder_context
+            .decoder()
+            .audio()
+            .context("Failed to create audio decoder")?;
+
+        // Set up resampler to convert to 16kHz mono f32
+        // We use f32 directly since that's what whisper needs
+        let resampler = ffmpeg::software::resampling::context::Context::get(
+            decoder.format(),
+            decoder.channel_layout(),
+            decoder.rate(),
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            ffmpeg::ChannelLayout::MONO,
+            WHISPER_SAMPLE_RATE,
+        )
+        .context("Failed to create audio resampler")?;
+
+        let chunk_samples = CHUNK_DURATION_SECS * WHISPER_SAMPLE_RATE as usize;
+
+        Ok(Self {
+            ictx,
+            decoder,
+            resampler,
+            audio_stream_index,
+            time_base,
+            chunk_samples,
+            total_duration_us,
+            sample_buffer: Vec::new(),
+            eof_sent: false,
+            resampler_flushed: false,
+            current_position_us: 0,
+        })
+    }
+
+    /// Get the total duration in seconds
+    pub fn duration_secs(&self) -> f64 {
+        self.total_duration_us as f64 / 1_000_000.0
+    }
+
+    /// Get the total duration in microseconds (for progress tracking)
+    pub fn total_duration_us(&self) -> i64 {
+        self.total_duration_us
+    }
+
+    /// Get the current position in microseconds (for progress tracking)
+    pub fn current_position_us(&self) -> i64 {
+        self.current_position_us
+    }
+
+    /// Decode more samples into the buffer
+    fn decode_more(&mut self) -> Result<bool> {
+        // Try to get more packets
+        while let Some((stream, packet)) = self.ictx.packets().next() {
+            if stream.index() == self.audio_stream_index {
+                // Update progress based on packet timestamp
+                if let Some(pts) = packet.pts() {
+                    let time_us = pts * 1_000_000 * self.time_base.numerator() as i64
+                        / self.time_base.denominator() as i64;
+                    if time_us > 0 {
+                        self.current_position_us = time_us;
+                    }
+                }
+
+                self.decoder.send_packet(&packet).ok();
+
+                let mut decoded_frame = ffmpeg::frame::Audio::empty();
+                while self.decoder.receive_frame(&mut decoded_frame).is_ok() {
+                    // Resample the frame
+                    let mut resampled_frame = ffmpeg::frame::Audio::empty();
+                    self.resampler
+                        .run(&decoded_frame, &mut resampled_frame)
+                        .context("Failed to resample audio frame")?;
+
+                    // Extract samples from the resampled frame
+                    if resampled_frame.samples() > 0 {
+                        let data = resampled_frame.data(0);
+                        let samples: &[f32] = bytemuck::cast_slice(data);
+                        self.sample_buffer
+                            .extend_from_slice(&samples[..resampled_frame.samples()]);
+                    }
+                }
+
+                // Return if we have enough samples for a chunk
+                if self.sample_buffer.len() >= self.chunk_samples {
+                    return Ok(true);
+                }
+            }
+        }
+
+        // No more packets, flush decoder
+        if !self.eof_sent {
+            self.decoder.send_eof().ok();
+            self.eof_sent = true;
+
+            let mut decoded_frame = ffmpeg::frame::Audio::empty();
+            while self.decoder.receive_frame(&mut decoded_frame).is_ok() {
+                let mut resampled_frame = ffmpeg::frame::Audio::empty();
+                if self.resampler.run(&decoded_frame, &mut resampled_frame).is_ok()
+                    && resampled_frame.samples() > 0
+                {
+                    let data = resampled_frame.data(0);
+                    let samples: &[f32] = bytemuck::cast_slice(data);
+                    self.sample_buffer
+                        .extend_from_slice(&samples[..resampled_frame.samples()]);
+                }
+            }
+        }
+
+        // Flush resampler
+        if !self.resampler_flushed {
+            self.resampler_flushed = true;
+            loop {
+                let mut resampled_frame = ffmpeg::frame::Audio::empty();
+                match self.resampler.flush(&mut resampled_frame) {
+                    Ok(_) if resampled_frame.samples() > 0 => {
+                        let data = resampled_frame.data(0);
+                        let samples: &[f32] = bytemuck::cast_slice(data);
+                        self.sample_buffer
+                            .extend_from_slice(&samples[..resampled_frame.samples()]);
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        // Return true if we have any samples left
+        Ok(!self.sample_buffer.is_empty())
+    }
+
+    /// Get the next chunk of audio samples.
+    /// Returns None when all audio has been read.
+    pub fn next_chunk(&mut self) -> Result<Option<Vec<f32>>> {
+        // Decode more if we don't have enough samples
+        if self.sample_buffer.len() < self.chunk_samples {
+            self.decode_more()?;
+        }
+
+        if self.sample_buffer.is_empty() {
+            return Ok(None);
+        }
+
+        // Take up to chunk_samples from the buffer
+        let take_count = self.sample_buffer.len().min(self.chunk_samples);
+        let chunk: Vec<f32> = self.sample_buffer.drain(..take_count).collect();
+
+        Ok(Some(chunk))
+    }
+}
+
+impl Iterator for AudioStream {
+    type Item = Result<Vec<f32>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next_chunk() {
+            Ok(Some(chunk)) => Some(Ok(chunk)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

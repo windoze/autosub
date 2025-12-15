@@ -11,6 +11,7 @@ use indicatif::ProgressBar;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
+use crate::audio::AudioStream;
 use crate::config::WhisperModelSize;
 use crate::srt::{SrtWriter, Subtitle};
 use std::io::Write;
@@ -366,6 +367,105 @@ impl WhisperModel {
         Ok(subtitle)
     }
 
+    /// Transcribe audio from a streaming AudioStream and write segments as they're decoded.
+    /// This processes audio in 30-second chunks without loading the entire file into memory.
+    /// The `create_progress` callback is called right before transcription begins.
+    pub fn transcribe_stream<W: Write, F>(
+        &mut self,
+        mut audio_stream: AudioStream,
+        language: Option<&str>,
+        writer: &mut SrtWriter<W>,
+        create_progress: F,
+    ) -> Result<Subtitle>
+    where
+        F: FnOnce() -> Option<ProgressBar>,
+    {
+        let duration_secs = audio_stream.duration_secs();
+        let total_duration_us = audio_stream.total_duration_us();
+
+        info!("Streaming transcription: {:.2} seconds of audio", duration_secs);
+
+        // Create progress bar now
+        let progress = create_progress();
+        if let Some(pb) = progress.as_ref() {
+            if total_duration_us > 0 {
+                pb.set_length(total_duration_us as u64);
+            }
+            pb.set_position(0);
+        }
+
+        let mut subtitle = Subtitle::new();
+        let mut chunk_index = 0;
+        let n_mels = self.config.num_mel_bins;
+
+        // Process each 30-second chunk from the stream
+        while let Some(chunk_result) = audio_stream.next() {
+            let samples = chunk_result.context("Failed to read audio chunk")?;
+            let time_offset = chunk_index as f64 * 30.0; // Each chunk is 30 seconds
+
+            debug!(
+                "Processing chunk {} at offset {:.2}s ({} samples)",
+                chunk_index,
+                time_offset,
+                samples.len()
+            );
+
+            // Compute mel spectrogram for this chunk only
+            let mel = audio::pcm_to_mel(&self.config, &samples, &self.mel_filters);
+            let mel_len = mel.len();
+            let content_frames = mel_len / n_mels;
+
+            debug!(
+                "Chunk {} mel: {} samples -> {} frames",
+                chunk_index,
+                samples.len(),
+                content_frames
+            );
+
+            // Create mel tensor and ensure it's exactly N_FRAMES
+            let mel = Tensor::from_vec(mel, (1, n_mels, content_frames), &self.device)?;
+
+            // Pad or truncate to exactly N_FRAMES
+            let mel = if content_frames < N_FRAMES {
+                // Pad with zeros
+                let padding = Tensor::zeros(
+                    (1, n_mels, N_FRAMES - content_frames),
+                    candle_core::DType::F32,
+                    &self.device,
+                )?;
+                Tensor::cat(&[&mel, &padding], 2)?
+            } else if content_frames > N_FRAMES {
+                // Truncate to N_FRAMES
+                mel.narrow(2, 0, N_FRAMES)?
+            } else {
+                mel
+            };
+
+            // Reset KV cache before processing a new chunk
+            self.model.reset_kv_cache();
+
+            // Encode audio chunk
+            let audio_features = self.model.encoder.forward(&mel, true)?;
+
+            // Decode and write segments from this chunk
+            self.decode_segment_to_writer(&audio_features, language, time_offset, writer, &mut subtitle)?;
+
+            // Update progress
+            if let Some(pb) = progress.as_ref() {
+                pb.set_position(audio_stream.current_position_us() as u64);
+            }
+
+            chunk_index += 1;
+        }
+
+        if let Some(pb) = progress.as_ref() {
+            pb.finish_with_message(format!("Transcribed {} segments", subtitle.len()));
+        }
+
+        info!("Transcription complete: {} segments", subtitle.len());
+        Ok(subtitle)
+    }
+
     /// Decode a single segment and write to writer.
     /// Returns the last timestamp (in seconds, relative to segment start) for seek advancement.
     fn decode_segment_to_writer<W: Write>(
@@ -633,6 +733,29 @@ where
     let mut model = WhisperModel::load(model_size, cache_dir, device)?;
     let mut writer = SrtWriter::create(output_path)?;
     let subtitle = model.transcribe_to_writer(audio_path, language, &mut writer, create_progress)?;
+    writer.finish()?;
+    Ok(subtitle)
+}
+
+/// Transcribe audio using streaming mode - processes audio directly from media files
+/// without creating a temp WAV file. Each 30-second chunk is decoded and transcribed
+/// on the fly, reducing memory usage.
+/// The `create_progress` callback is called right before transcription begins.
+pub fn transcribe_stream_to_file<F>(
+    audio_stream: AudioStream,
+    output_path: &Path,
+    model_size: WhisperModelSize,
+    cache_dir: Option<PathBuf>,
+    device: Device,
+    language: Option<&str>,
+    create_progress: F,
+) -> Result<Subtitle>
+where
+    F: FnOnce() -> Option<ProgressBar>,
+{
+    let mut model = WhisperModel::load(model_size, cache_dir, device)?;
+    let mut writer = SrtWriter::create(output_path)?;
+    let subtitle = model.transcribe_stream(audio_stream, language, &mut writer, create_progress)?;
     writer.finish()?;
     Ok(subtitle)
 }
