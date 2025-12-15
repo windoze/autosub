@@ -52,12 +52,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        shell: msys2 {0}
+        shell: pwsh
         env:
           CUDA_COMPUTE_CAP: "80"
         run: |
-          export PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/bin:$PATH"
-          export CUDA_PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6"
+          # Add MSYS2 ucrt64 bin to PATH for FFmpeg build tools (nasm, etc.)
+          $env:PATH = "D:\a\_temp\msys64\ucrt64\bin;$env:PATH"
           cargo build --release --features cuda,ffmpeg-build --no-default-features
 
       - name: Create archive
