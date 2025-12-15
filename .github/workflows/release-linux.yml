@@ -31,9 +31,9 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.29
         id: cuda-toolkit
         with:
-          cuda: '13.0'
+          cuda: '12.6.3'
           method: 'network'
-          sub-packages: '["nvcc", "cudart", "nvrtc", "nvrtc-dev", "nvcc", "cudart-dev"]'
+          sub-packages: '["nvcc", "cudart", "nvrtc", "nvrtc-dev", "cudart-dev"]'
           non-cuda-sub-packages: '["libcublas", "libcurand"]'
 
       - name: Install Rust
