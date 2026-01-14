@@ -11,14 +11,16 @@ use indicatif::ProgressBar;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
-use crate::audio::AudioStream;
+use crate::audio::{AudioStream, WHISPER_SAMPLE_RATE};
 use crate::config::WhisperModelSize;
 use crate::srt::{SrtWriter, Subtitle};
+use crate::vad::{SpeechSegment, VadSegmenter, WebRtcVad, WebRtcVadMode};
 use std::io::Write;
 
-const SAMPLE_RATE: usize = 16000;
+const SAMPLE_RATE: usize = WHISPER_SAMPLE_RATE as usize;
 const N_FRAMES: usize = 3000; // Frames per 30-second segment
 const HOP_LENGTH: usize = 160;
+const VAD_FRAME_DURATION_MS: usize = 30;
 
 // Pre-computed mel filter banks from OpenAI Whisper
 const MEL_FILTERS_80: &[u8] = include_bytes!("melfilters.bytes");
@@ -26,7 +28,7 @@ const MEL_FILTERS_128: &[u8] = include_bytes!("melfilters128.bytes");
 
 // Whisper timestamp token range
 const TIMESTAMP_BEGIN: u32 = 50364; // <|0.00|>
-const TIMESTAMP_END: u32 = 51864;   // <|30.00|>
+const TIMESTAMP_END: u32 = 51864; // <|30.00|>
 
 /// Convert a timestamp token to seconds
 fn timestamp_token_to_seconds(token: u32) -> f64 {
@@ -146,7 +148,69 @@ fn is_hallucinated_text(text: &str) -> bool {
         }
     }
 
+    // Check for repetitive sentences without punctuations
+    if let Some((longest_substr, repeat_count)) = find_longest_repeated_substring(text) {
+        // TODO: Tune thresholds based on testing
+        if repeat_count >= 5 && longest_substr.chars().count() >= 3 {
+            return true;
+        }
+    }
+
+    // Some other common patterns
+    // TODO: Make this list extensible based on observed hallucinations
+    if text.contains("字幕") || text.contains("(下集") || text.contains("謝謝大家") || text.contains("www.") || text.contains("http") {
+        return true;
+    }
+
     false
+}
+
+fn find_longest_repeated_substring(s: &str) -> Option<(String, usize)> {
+    let n = s.len();
+    if n == 0 {
+        return None;
+    }
+
+    // 1. Construct Suffix Array
+    // We use char_indices to ensure suffixes start at valid character boundaries.
+    let mut suffixes: Vec<&str> = s.char_indices().map(|(i, _)| &s[i..]).collect();
+
+    suffixes.sort();
+
+    // 2. Analyze LCP (Longest Common Prefix)
+    let mut max_byte_len = 0;
+    let mut longest_substr = "";
+    let mut significant_repeats_count = 0;
+
+    for pair in suffixes.windows(2) {
+        let u = pair[0];
+        let v = pair[1];
+
+        // CORRECTED: Compare using .chars() to respect UTF-8
+        // We calculate the byte length of the matching character sequence
+        let common_byte_len: usize = u
+            .chars()
+            .zip(v.chars())
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| a.len_utf8()) // Get byte size of the matching char
+            .sum();
+
+        if common_byte_len > 0 {
+            significant_repeats_count += 1;
+        }
+
+        // We track the longest match by byte length (which correlates to string length)
+        if common_byte_len > max_byte_len {
+            max_byte_len = common_byte_len;
+            // Safe slicing: we summed valid len_utf8(), so this index is safe.
+            longest_substr = &u[..max_byte_len];
+        }
+    }
+    if max_byte_len > 0 {
+        Some((longest_substr.to_string(), significant_repeats_count))
+    } else {
+        None
+    }
 }
 
 /// A segment of transcribed text with timing
@@ -279,7 +343,11 @@ impl WhisperModel {
         let samples = Self::load_audio(audio_path)?;
         let duration_secs = samples.len() as f64 / SAMPLE_RATE as f64;
 
-        info!("Loaded {:.2} seconds of audio ({} samples)", duration_secs, samples.len());
+        info!(
+            "Loaded {:.2} seconds of audio ({} samples)",
+            duration_secs,
+            samples.len()
+        );
 
         // Compute mel spectrogram for the ENTIRE audio file
         let mel = audio::pcm_to_mel(&self.config, &samples, &self.mel_filters);
@@ -300,6 +368,7 @@ impl WhisperModel {
 
         // Process in segments of N_FRAMES
         let mut subtitle = Subtitle::new();
+        let mut last_end_time = 0.0_f64;
         let mut seek = 0;
 
         // Create progress bar now that all preprocessing is done
@@ -324,7 +393,11 @@ impl WhisperModel {
             // Pad to N_FRAMES if needed
             let mel_segment = if segment_size < N_FRAMES {
                 // Pad with zeros
-                let padding = Tensor::zeros((1, n_mels, N_FRAMES - segment_size), candle_core::DType::F32, &self.device)?;
+                let padding = Tensor::zeros(
+                    (1, n_mels, N_FRAMES - segment_size),
+                    candle_core::DType::F32,
+                    &self.device,
+                )?;
                 Tensor::cat(&[&mel_segment, &padding], 2)?
             } else {
                 mel_segment
@@ -337,13 +410,21 @@ impl WhisperModel {
             let audio_features = self.model.encoder.forward(&mel_segment, true)?;
 
             // Decode and write, getting the last timestamp for seeking
-            let last_timestamp = self.decode_segment_to_writer(&audio_features, language, time_offset, writer, &mut subtitle)?;
+            let last_timestamp = self.decode_segment_to_writer(
+                &audio_features,
+                language,
+                time_offset,
+                writer,
+                &mut subtitle,
+                &mut last_end_time,
+            )?;
 
             // Advance seek based on the last timestamp from the model
             // Convert timestamp (seconds within segment) to frames
             let seek_advance = if last_timestamp > 0.0 {
                 // Use the last timestamp to determine how far to advance
-                let frames_from_timestamp = (last_timestamp * SAMPLE_RATE as f64 / HOP_LENGTH as f64) as usize;
+                let frames_from_timestamp =
+                    (last_timestamp * SAMPLE_RATE as f64 / HOP_LENGTH as f64) as usize;
                 // Advance at least 1 frame to avoid infinite loops, but use timestamp when available
                 frames_from_timestamp.max(1)
             } else {
@@ -375,6 +456,8 @@ impl WhisperModel {
         mut audio_stream: AudioStream,
         language: Option<&str>,
         writer: &mut SrtWriter<W>,
+        vad_enabled: bool,
+        vad_silence_secs: f32,
         create_progress: F,
     ) -> Result<Subtitle>
     where
@@ -383,7 +466,10 @@ impl WhisperModel {
         let duration_secs = audio_stream.duration_secs();
         let total_duration_us = audio_stream.total_duration_us();
 
-        info!("Streaming transcription: {:.2} seconds of audio", duration_secs);
+        info!(
+            "Streaming transcription: {:.2} seconds of audio",
+            duration_secs
+        );
 
         // Create progress bar now
         let progress = create_progress();
@@ -395,67 +481,72 @@ impl WhisperModel {
         }
 
         let mut subtitle = Subtitle::new();
-        let mut chunk_index = 0;
+        let mut last_end_time = 0.0_f64;
         let n_mels = self.config.num_mel_bins;
+        let mut processed_samples: usize = 0;
 
-        // Process each 30-second chunk from the stream
-        while let Some(chunk_result) = audio_stream.next() {
-            let samples = chunk_result.context("Failed to read audio chunk")?;
-            let time_offset = chunk_index as f64 * 30.0; // Each chunk is 30 seconds
+        if vad_enabled {
+            let vad_mode = WebRtcVadMode::Aggressive;
+            let vad = WebRtcVad::new(WHISPER_SAMPLE_RATE, VAD_FRAME_DURATION_MS, vad_mode)
+                .context("Failed to initialize WebRTC VAD")?;
+            let mut segmenter = VadSegmenter::new(vad, VAD_FRAME_DURATION_MS, vad_silence_secs);
 
-            debug!(
-                "Processing chunk {} at offset {:.2}s ({} samples)",
-                chunk_index,
-                time_offset,
-                samples.len()
-            );
+            // Process each chunk from the stream, but only forward speech segments to the ASR
+            while let Some(chunk_result) = audio_stream.next() {
+                let samples = chunk_result.context("Failed to read audio chunk")?;
 
-            // Compute mel spectrogram for this chunk only
-            let mel = audio::pcm_to_mel(&self.config, &samples, &self.mel_filters);
-            let mel_len = mel.len();
-            let content_frames = mel_len / n_mels;
+                for segment in segmenter.push_samples(&samples)? {
+                    self.transcribe_speech_segment(
+                        segment,
+                        n_mels,
+                        language,
+                        writer,
+                        &mut subtitle,
+                        &mut last_end_time,
+                    )?;
+                }
 
-            debug!(
-                "Chunk {} mel: {} samples -> {} frames",
-                chunk_index,
-                samples.len(),
-                content_frames
-            );
-
-            // Create mel tensor and ensure it's exactly N_FRAMES
-            let mel = Tensor::from_vec(mel, (1, n_mels, content_frames), &self.device)?;
-
-            // Pad or truncate to exactly N_FRAMES
-            let mel = if content_frames < N_FRAMES {
-                // Pad with zeros
-                let padding = Tensor::zeros(
-                    (1, n_mels, N_FRAMES - content_frames),
-                    candle_core::DType::F32,
-                    &self.device,
-                )?;
-                Tensor::cat(&[&mel, &padding], 2)?
-            } else if content_frames > N_FRAMES {
-                // Truncate to N_FRAMES
-                mel.narrow(2, 0, N_FRAMES)?
-            } else {
-                mel
-            };
-
-            // Reset KV cache before processing a new chunk
-            self.model.reset_kv_cache();
-
-            // Encode audio chunk
-            let audio_features = self.model.encoder.forward(&mel, true)?;
-
-            // Decode and write segments from this chunk
-            self.decode_segment_to_writer(&audio_features, language, time_offset, writer, &mut subtitle)?;
-
-            // Update progress
-            if let Some(pb) = progress.as_ref() {
-                pb.set_position(audio_stream.current_position_us() as u64);
+                if let Some(pb) = progress.as_ref() {
+                    pb.set_position(audio_stream.current_position_us() as u64);
+                }
             }
 
-            chunk_index += 1;
+            // Flush any buffered speech at the end of the stream
+            for segment in segmenter.flush()? {
+                self.transcribe_speech_segment(
+                    segment,
+                    n_mels,
+                    language,
+                    writer,
+                    &mut subtitle,
+                    &mut last_end_time,
+                )?;
+            }
+        } else {
+            // VAD disabled: process stream in fixed chunks, preserving offsets
+            while let Some(chunk_result) = audio_stream.next() {
+                let samples = chunk_result.context("Failed to read audio chunk")?;
+                let segment = SpeechSegment {
+                    start_sample: processed_samples,
+                    end_sample: processed_samples + samples.len(),
+                    samples,
+                    should_reset_context: true,
+                };
+                processed_samples = segment.end_sample;
+
+                self.transcribe_speech_segment(
+                    segment,
+                    n_mels,
+                    language,
+                    writer,
+                    &mut subtitle,
+                    &mut last_end_time,
+                )?;
+
+                if let Some(pb) = progress.as_ref() {
+                    pb.set_position(audio_stream.current_position_us() as u64);
+                }
+            }
         }
 
         if let Some(pb) = progress.as_ref() {
@@ -464,6 +555,65 @@ impl WhisperModel {
 
         info!("Transcription complete: {} segments", subtitle.len());
         Ok(subtitle)
+    }
+
+    fn transcribe_speech_segment<W: Write>(
+        &mut self,
+        segment: SpeechSegment,
+        n_mels: usize,
+        language: Option<&str>,
+        writer: &mut SrtWriter<W>,
+        subtitle: &mut Subtitle,
+        last_end_time: &mut f64,
+    ) -> Result<()> {
+        let sample_count = segment.end_sample.saturating_sub(segment.start_sample);
+        if sample_count == 0 || segment.samples.is_empty() {
+            return Ok(());
+        }
+
+        if segment.should_reset_context {
+            debug!("Resetting ASR context after extended silence");
+        }
+
+        // Always start each decode with a clean cache to avoid leaking context.
+        self.model.reset_kv_cache();
+
+        let time_offset = segment.start_sample as f64 / SAMPLE_RATE as f64;
+
+        let mel = audio::pcm_to_mel(&self.config, &segment.samples, &self.mel_filters);
+        let mel_len = mel.len();
+        let content_frames = mel_len / n_mels;
+
+        if content_frames == 0 {
+            return Ok(());
+        }
+
+        let mel = Tensor::from_vec(mel, (1, n_mels, content_frames), &self.device)?;
+
+        let mel = if content_frames < N_FRAMES {
+            let padding = Tensor::zeros(
+                (1, n_mels, N_FRAMES - content_frames),
+                candle_core::DType::F32,
+                &self.device,
+            )?;
+            Tensor::cat(&[&mel, &padding], 2)?
+        } else if content_frames > N_FRAMES {
+            mel.narrow(2, 0, N_FRAMES)?
+        } else {
+            mel
+        };
+
+        let audio_features = self.model.encoder.forward(&mel, true)?;
+
+        self.decode_segment_to_writer(
+            &audio_features,
+            language,
+            time_offset,
+            writer,
+            subtitle,
+            last_end_time,
+        )?;
+        Ok(())
     }
 
     /// Decode a single segment and write to writer.
@@ -475,9 +625,11 @@ impl WhisperModel {
         time_offset: f64,
         writer: &mut SrtWriter<W>,
         subtitle: &mut Subtitle,
+        last_end_time: &mut f64,
     ) -> Result<f64> {
         // Decode with timestamps
-        let (segments, last_timestamp) = self.decode_segment_with_timestamps(audio_features, language)?;
+        let (segments, last_timestamp) =
+            self.decode_segment_with_timestamps(audio_features, language)?;
 
         for seg in segments {
             let text = self.decode_tokens(&seg.tokens)?;
@@ -488,8 +640,15 @@ impl WhisperModel {
                 continue;
             }
 
-            let start_time = time_offset + seg.start;
-            let end_time = time_offset + seg.end;
+            let mut start_time = time_offset + seg.start;
+            let mut end_time = time_offset + seg.end;
+
+            if start_time < *last_end_time {
+                start_time = *last_end_time;
+            }
+            if end_time <= start_time {
+                end_time = start_time + 0.01;
+            }
 
             // Split long segments into sentences
             let sentences = split_into_sentences(text, start_time, end_time);
@@ -498,6 +657,7 @@ impl WhisperModel {
                 debug!("Segment: {:.2}-{:.2}: {}", sent_start, sent_end, sent_text);
                 writer.write_entry(sent_start, sent_end, &sent_text)?;
                 subtitle.push(sent_start, sent_end, sent_text);
+                *last_end_time = (*last_end_time).max(sent_end);
             }
         }
 
@@ -518,9 +678,8 @@ impl WhisperModel {
 
         // Language token - either use specified language or auto-detect
         let language_token = if let Some(lang) = language {
-            self.token_id(&format!("<|{}|>", lang)).unwrap_or_else(|_| {
-                self.token_id("<|en|>").unwrap()
-            })
+            self.token_id(&format!("<|{}|>", lang))
+                .unwrap_or_else(|_| self.token_id("<|en|>").unwrap())
         } else {
             // Auto-detect language by letting model predict after SOT token
             self.detect_language(audio_features)?
@@ -539,7 +698,10 @@ impl WhisperModel {
             let tokens_tensor = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
 
             // flush_kv_cache should be true only on the first iteration
-            let ys = self.model.decoder.forward(&tokens_tensor, audio_features, i == 0)?;
+            let ys = self
+                .model
+                .decoder
+                .forward(&tokens_tensor, audio_features, i == 0)?;
 
             // Get the last position's hidden states and apply final linear layer to get logits
             let (_, seq_len, _) = ys.dims3()?;
@@ -732,7 +894,8 @@ where
 {
     let mut model = WhisperModel::load(model_size, cache_dir, device)?;
     let mut writer = SrtWriter::create(output_path)?;
-    let subtitle = model.transcribe_to_writer(audio_path, language, &mut writer, create_progress)?;
+    let subtitle =
+        model.transcribe_to_writer(audio_path, language, &mut writer, create_progress)?;
     writer.finish()?;
     Ok(subtitle)
 }
@@ -741,6 +904,7 @@ where
 /// without creating a temp WAV file. Each 30-second chunk is decoded and transcribed
 /// on the fly, reducing memory usage.
 /// The `create_progress` callback is called right before transcription begins.
+#[allow(clippy::too_many_arguments)]
 pub fn transcribe_stream_to_file<F>(
     audio_stream: AudioStream,
     output_path: &Path,
@@ -748,6 +912,8 @@ pub fn transcribe_stream_to_file<F>(
     cache_dir: Option<PathBuf>,
     device: Device,
     language: Option<&str>,
+    vad_enabled: bool,
+    vad_silence_secs: f32,
     create_progress: F,
 ) -> Result<Subtitle>
 where
@@ -755,7 +921,14 @@ where
 {
     let mut model = WhisperModel::load(model_size, cache_dir, device)?;
     let mut writer = SrtWriter::create(output_path)?;
-    let subtitle = model.transcribe_stream(audio_stream, language, &mut writer, create_progress)?;
+    let subtitle = model.transcribe_stream(
+        audio_stream,
+        language,
+        &mut writer,
+        vad_enabled,
+        vad_silence_secs,
+        create_progress,
+    )?;
     writer.finish()?;
     Ok(subtitle)
 }

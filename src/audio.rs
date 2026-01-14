@@ -81,7 +81,10 @@ pub fn cleanup_orphaned_temp_files() {
                 // Clean up autosub temp files from other processes
                 if name.starts_with("autosub_") && name.ends_with(".wav") {
                     // Extract PID from filename
-                    if let Some(pid_str) = name.strip_prefix("autosub_").and_then(|s| s.strip_suffix(".wav")) {
+                    if let Some(pid_str) = name
+                        .strip_prefix("autosub_")
+                        .and_then(|s| s.strip_suffix(".wav"))
+                    {
                         if let Ok(pid) = pid_str.parse::<u32>() {
                             // Don't delete our own temp file
                             if pid == current_pid {
@@ -150,8 +153,7 @@ pub fn extract_audio(input: &Path, progress: Option<&ProgressBar>) -> Result<Ext
     ffmpeg::log::set_level(ffmpeg::log::Level::Error);
 
     // Open input file
-    let mut ictx = ffmpeg::format::input(input)
-        .context("Failed to open input file with FFmpeg")?;
+    let mut ictx = ffmpeg::format::input(input).context("Failed to open input file with FFmpeg")?;
 
     // Get duration for progress tracking (in microseconds)
     let duration_us = ictx.duration();
@@ -200,7 +202,8 @@ pub fn extract_audio(input: &Path, progress: Option<&ProgressBar>) -> Result<Ext
             // Update progress based on packet timestamp
             if let (Some(pb), Some(pts)) = (progress, packet.pts()) {
                 // Convert pts to microseconds
-                let time_us = pts * 1_000_000 * time_base.numerator() as i64 / time_base.denominator() as i64;
+                let time_us =
+                    pts * 1_000_000 * time_base.numerator() as i64 / time_base.denominator() as i64;
                 if time_us > 0 {
                     pb.set_position(time_us as u64);
                 }
@@ -231,7 +234,9 @@ pub fn extract_audio(input: &Path, progress: Option<&ProgressBar>) -> Result<Ext
     let mut decoded_frame = ffmpeg::frame::Audio::empty();
     while decoder.receive_frame(&mut decoded_frame).is_ok() {
         let mut resampled_frame = ffmpeg::frame::Audio::empty();
-        if resampler.run(&decoded_frame, &mut resampled_frame).is_ok() && resampled_frame.samples() > 0 {
+        if resampler.run(&decoded_frame, &mut resampled_frame).is_ok()
+            && resampled_frame.samples() > 0
+        {
             let data = resampled_frame.data(0);
             let samples: &[i16] = bytemuck::cast_slice(data);
             all_samples.extend_from_slice(&samples[..resampled_frame.samples()]);
@@ -259,11 +264,13 @@ pub fn extract_audio(input: &Path, progress: Option<&ProgressBar>) -> Result<Ext
         sample_format: hound::SampleFormat::Int,
     };
 
-    let mut writer = hound::WavWriter::create(&temp_wav, spec)
-        .context("Failed to create output WAV file")?;
+    let mut writer =
+        hound::WavWriter::create(&temp_wav, spec).context("Failed to create output WAV file")?;
 
     for sample in &all_samples {
-        writer.write_sample(*sample).context("Failed to write audio sample")?;
+        writer
+            .write_sample(*sample)
+            .context("Failed to write audio sample")?;
     }
 
     writer.finalize().context("Failed to finalize WAV file")?;
@@ -292,8 +299,7 @@ impl AudioChunkReader {
     /// * `path` - Path to the WAV file
     /// * `chunk_duration_secs` - Duration of each chunk in seconds
     pub fn open(path: &Path, chunk_duration_secs: usize) -> Result<Self> {
-        let reader = hound::WavReader::open(path)
-            .context("Failed to open WAV file")?;
+        let reader = hound::WavReader::open(path).context("Failed to open WAV file")?;
 
         let spec = reader.spec();
         info!(
@@ -430,8 +436,7 @@ impl AudioStream {
         ffmpeg::log::set_level(ffmpeg::log::Level::Error);
 
         // Open input file
-        let ictx = ffmpeg::format::input(input)
-            .context("Failed to open input file with FFmpeg")?;
+        let ictx = ffmpeg::format::input(input).context("Failed to open input file with FFmpeg")?;
 
         // Get duration for progress tracking (in microseconds)
         let total_duration_us = ictx.duration();
@@ -547,7 +552,10 @@ impl AudioStream {
             let mut decoded_frame = ffmpeg::frame::Audio::empty();
             while self.decoder.receive_frame(&mut decoded_frame).is_ok() {
                 let mut resampled_frame = ffmpeg::frame::Audio::empty();
-                if self.resampler.run(&decoded_frame, &mut resampled_frame).is_ok()
+                if self
+                    .resampler
+                    .run(&decoded_frame, &mut resampled_frame)
+                    .is_ok()
                     && resampled_frame.samples() > 0
                 {
                     let data = resampled_frame.data(0);

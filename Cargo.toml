@@ -46,6 +46,7 @@ hound = "3.5"
 byteorder = "1.5"
 ffmpeg-next = "8"
 libc = "0.2"
+webrtc-vad = "0.4"
 
 [features]
 default = []

@@ -92,7 +92,8 @@ impl Subtitle {
     /// Add an entry to the subtitle
     pub fn push(&mut self, start: f64, end: f64, text: impl Into<String>) {
         let index = self.entries.len() + 1;
-        self.entries.push(SubtitleEntry::new(index, start, end, text));
+        self.entries
+            .push(SubtitleEntry::new(index, start, end, text));
     }
 
     /// Add an entry with explicit index
@@ -178,10 +179,7 @@ impl Subtitle {
 
     /// Get the total duration of the subtitle
     pub fn duration(&self) -> f64 {
-        self.entries
-            .last()
-            .map(|e| e.end)
-            .unwrap_or(0.0)
+        self.entries.last().map(|e| e.end).unwrap_or(0.0)
     }
 
     /// Get the number of entries

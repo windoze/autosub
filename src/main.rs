@@ -73,10 +73,13 @@ async fn run(mut config: Config) -> Result<()> {
     }
 
     // Step 1: Open audio stream (no temp file needed)
-    let audio_stream = AudioStream::open(&config.input)
-        .context("Failed to open audio stream from input file")?;
+    let audio_stream =
+        AudioStream::open(&config.input).context("Failed to open audio stream from input file")?;
 
-    info!("Audio duration: {:.2} seconds", audio_stream.duration_secs());
+    info!(
+        "Audio duration: {:.2} seconds",
+        audio_stream.duration_secs()
+    );
 
     // Step 2: Transcribe with Whisper using streaming, writing SRT as we go
     let output_path = config.output_path();
@@ -90,11 +93,17 @@ async fn run(mut config: Config) -> Result<()> {
         Some(config.cache_dir()),
         device,
         config.language.as_deref(),
+        config.enable_vad,
+        config.vad_reset_secs,
         || Some(create_progress_bar("Transcribing")),
     )
     .context("Failed to transcribe audio")?;
 
-    info!("Transcription complete: {} segments written to {}", subtitle.len(), output_path.display());
+    info!(
+        "Transcription complete: {} segments written to {}",
+        subtitle.len(),
+        output_path.display()
+    );
 
     // Step 3: Translate if requested
     if let Some(ref target_lang) = config.translate {
@@ -107,15 +116,15 @@ async fn run(mut config: Config) -> Result<()> {
 
 /// Run translate-only mode: read existing SRT and translate it
 async fn run_translate_only(config: &Config) -> Result<()> {
-    let target_lang = config.translate.as_ref().context(
-        "--translate is required when using --translate-only",
-    )?;
+    let target_lang = config
+        .translate
+        .as_ref()
+        .context("--translate is required when using --translate-only")?;
 
     info!("Translate-only mode: reading existing SRT file");
 
     // Read the existing SRT file
-    let mut subtitle = Subtitle::from_file(&config.input)
-        .context("Failed to read SRT file")?;
+    let mut subtitle = Subtitle::from_file(&config.input).context("Failed to read SRT file")?;
 
     // Merge consecutive entries with same text before translation
     subtitle.merge_consecutive(0.1);
@@ -135,9 +144,9 @@ async fn translate_subtitle(subtitle: &Subtitle, target_lang: &str, config: &Con
         "LLM API key required for translation. Set --llm-api-key or AUTOSUB_LLM_API_KEY",
     )?;
 
-    let translated_path = config.translated_output_path().context(
-        "Could not determine output path for translated subtitles",
-    )?;
+    let translated_path = config
+        .translated_output_path()
+        .context("Could not determine output path for translated subtitles")?;
 
     info!(
         "Translating to {} using {:?} (streaming to {})...",
@@ -159,7 +168,10 @@ async fn translate_subtitle(subtitle: &Subtitle, target_lang: &str, config: &Con
     .await
     .context("Failed to translate subtitles")?;
 
-    info!("Saved translated subtitles to: {}", translated_path.display());
+    info!(
+        "Saved translated subtitles to: {}",
+        translated_path.display()
+    );
 
     Ok(())
 }

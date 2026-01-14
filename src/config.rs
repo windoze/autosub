@@ -143,7 +143,10 @@ pub enum LlmProvider {
 
 #[derive(Parser, Debug)]
 #[command(name = "autosub")]
-#[command(version, about = "CLI tool for video transcription and subtitle generation using Whisper")]
+#[command(
+    version,
+    about = "CLI tool for video transcription and subtitle generation using Whisper"
+)]
 pub struct Config {
     /// Input video file path
     #[arg(value_name = "INPUT")]
@@ -171,7 +174,12 @@ pub struct Config {
     pub translate_only: bool,
 
     /// LLM provider for translation
-    #[arg(long, value_enum, default_value = "openai", env = "AUTOSUB_LLM_PROVIDER")]
+    #[arg(
+        long,
+        value_enum,
+        default_value = "openai",
+        env = "AUTOSUB_LLM_PROVIDER"
+    )]
     pub llm_provider: LlmProvider,
 
     /// LLM API base URL (optional, for custom endpoints like Azure OpenAI)
@@ -202,6 +210,14 @@ pub struct Config {
     /// Enable verbose output
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Enable voice activity detection to skip silence before sending audio to ASR
+    #[arg(long, default_value_t = true, env = "AUTOSUB_ENABLE_VAD")]
+    pub enable_vad: bool,
+
+    /// Seconds of consecutive silence before ASR context is reset
+    #[arg(long, default_value = "3.0", env = "AUTOSUB_VAD_RESET_SECS")]
+    pub vad_reset_secs: f32,
 }
 
 impl Config {
@@ -215,9 +231,9 @@ impl Config {
     }
 
     pub fn output_path(&self) -> PathBuf {
-        self.output.clone().unwrap_or_else(|| {
-            self.input.with_extension("srt")
-        })
+        self.output
+            .clone()
+            .unwrap_or_else(|| self.input.with_extension("srt"))
     }
 
     pub fn translated_output_path(&self) -> Option<PathBuf> {
