@@ -163,10 +163,7 @@ pub fn probe_file(path: impl AsRef<Path>) -> Result<FileInfo> {
     let channels = decoder.channels();
 
     // Check if there are video streams
-    let has_video = ictx
-        .streams()
-        .best(ffmpeg::media::Type::Video)
-        .is_some();
+    let has_video = ictx.streams().best(ffmpeg::media::Type::Video).is_some();
 
     // Calculate total samples (approximate)
     let total_samples = (duration_secs * sample_rate as f64) as usize;

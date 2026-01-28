@@ -67,10 +67,7 @@ impl AudioStream {
         let audio_params = audio_stream.parameters();
 
         // Check if there are any video streams
-        let has_video = ictx
-            .streams()
-            .best(ffmpeg::media::Type::Video)
-            .is_some();
+        let has_video = ictx.streams().best(ffmpeg::media::Type::Video).is_some();
 
         // Create decoder for the audio stream
         let decoder_context = ffmpeg::codec::context::Context::from_parameters(audio_params)

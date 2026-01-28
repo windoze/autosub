@@ -22,7 +22,12 @@ pub struct AudioSegment {
 
 impl AudioSegment {
     /// Create a new AudioSegment
-    pub fn new(samples: Vec<f32>, start_sample: usize, end_sample: usize, sample_rate: u32) -> Self {
+    pub fn new(
+        samples: Vec<f32>,
+        start_sample: usize,
+        end_sample: usize,
+        sample_rate: u32,
+    ) -> Self {
         let start_time = start_sample as f64 / sample_rate as f64;
         let end_time = end_sample as f64 / sample_rate as f64;
 

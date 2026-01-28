@@ -6,8 +6,8 @@ use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::whisper::{self as m, audio, Config};
 use hf_hub::api::sync::Api;
-use tokenizers::Tokenizer;
 use std::sync::mpsc as std_mpsc;
+use tokenizers::Tokenizer;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
@@ -88,10 +88,7 @@ pub struct WhisperModel {
 impl WhisperModel {
     /// Download and load a Whisper model
     pub fn load(config: WhisperModelConfig) -> Result<Self> {
-        info!(
-            "Loading Whisper {:?} model...",
-            config.model_size
-        );
+        info!("Loading Whisper {:?} model...", config.model_size);
 
         let api = Api::new().context("Failed to create HuggingFace API")?;
         let api_repo = api.model(config.model_size.repo_id().to_string());
@@ -125,8 +122,12 @@ impl WhisperModel {
 
         // Load model weights
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_path], candle_core::DType::F32, &config.device)
-                .context("Failed to load model weights")?
+            VarBuilder::from_mmaped_safetensors(
+                &[weights_path],
+                candle_core::DType::F32,
+                &config.device,
+            )
+            .context("Failed to load model weights")?
         };
 
         let model = m::model::Whisper::load(&vb, model_config.clone())
@@ -199,7 +200,8 @@ impl WhisperModel {
 
         let audio_features = self.model.encoder.forward(&mel, true)?;
 
-        let segments = self.decode_segment_with_timestamps(&audio_features, language, initial_prompt)?;
+        let segments =
+            self.decode_segment_with_timestamps(&audio_features, language, initial_prompt)?;
 
         let mut results = Vec::new();
         let mut last_end_time = 0.0_f64;
@@ -447,7 +449,11 @@ unsafe impl Send for AsrEngine {}
 
 impl AsrEngine {
     /// Create a new ASR engine with VAD and default hallucination filter
-    pub fn new(model: WhisperModel, language: Option<String>, vad_config: VadConfig) -> Result<Self> {
+    pub fn new(
+        model: WhisperModel,
+        language: Option<String>,
+        vad_config: VadConfig,
+    ) -> Result<Self> {
         Self::with_filter(
             model,
             language,
@@ -545,8 +551,17 @@ impl AsrEngine {
                 );
 
                 info!("Starting Whisper transcription for segment {}...", idx + 1);
-                let results = self.model.transcribe_clip(clip, self.language.as_deref(), self.initial_prompt.as_deref(), self.filter.as_deref())?;
-                info!("Whisper transcription completed for segment {}, got {} results", idx + 1, results.len());
+                let results = self.model.transcribe_clip(
+                    clip,
+                    self.language.as_deref(),
+                    self.initial_prompt.as_deref(),
+                    self.filter.as_deref(),
+                )?;
+                info!(
+                    "Whisper transcription completed for segment {}, got {} results",
+                    idx + 1,
+                    results.len()
+                );
 
                 for result in results {
                     if output.blocking_send(result).is_err() {
@@ -606,8 +621,17 @@ impl AsrEngine {
                 );
 
                 info!("Starting Whisper transcription for segment {}...", idx + 1);
-                let results = self.model.transcribe_clip(clip, self.language.as_deref(), self.initial_prompt.as_deref(), self.filter.as_deref())?;
-                info!("Whisper transcription completed for segment {}, got {} results", idx + 1, results.len());
+                let results = self.model.transcribe_clip(
+                    clip,
+                    self.language.as_deref(),
+                    self.initial_prompt.as_deref(),
+                    self.filter.as_deref(),
+                )?;
+                info!(
+                    "Whisper transcription completed for segment {}, got {} results",
+                    idx + 1,
+                    results.len()
+                );
 
                 for result in results {
                     if output.send(result).is_err() {

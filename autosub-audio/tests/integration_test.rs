@@ -229,7 +229,8 @@ fn test_audio_stream_basic() {
     }
 
     // Open audio stream
-    let mut audio_stream = AudioStream::open(&test_video, None).expect("Failed to open audio stream");
+    let mut audio_stream =
+        AudioStream::open(&test_video, None).expect("Failed to open audio stream");
 
     let file_info = audio_stream.file_info();
     assert!(file_info.duration_secs > 0.0, "Duration should be positive");
@@ -243,7 +244,10 @@ fn test_audio_stream_basic() {
     let mut segment_count = 0;
 
     // Only check first segment to keep test fast
-    let segment = audio_stream.next().expect("Failed to read segment").unwrap();
+    let segment = audio_stream
+        .next()
+        .expect("Failed to read segment")
+        .unwrap();
     segment_count += 1;
 
     assert!(!segment.samples.is_empty(), "Segment should have samples");

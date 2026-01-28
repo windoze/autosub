@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use autosub_asr::{
-    AsrEngine, AsrInput, TranscriptionResult, VadConfig, VadMode, WhisperModel,
-    WhisperModelConfig, WhisperModelSize,
+    AsrEngine, AsrInput, TranscriptionResult, VadConfig, VadMode, WhisperModel, WhisperModelConfig,
+    WhisperModelSize,
 };
 use candle_core::Device;
 use tokio::sync::mpsc;
@@ -23,9 +23,7 @@ fn load_wav_samples(path: &str) -> Result<Vec<f32>> {
             .samples::<i16>()
             .map(|s| s.map(|s| s as f32 / i16::MAX as f32))
             .collect::<Result<Vec<_>, _>>()?,
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .collect::<Result<Vec<_>, _>>()?,
+        hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<Vec<_>, _>>()?,
     };
 
     Ok(samples)
@@ -409,6 +407,9 @@ fn test_multi_segment_audio() -> Result<()> {
         full_text
     );
 
-    println!("✓ Multi-segment test passed with {} segments!", results.len());
+    println!(
+        "✓ Multi-segment test passed with {} segments!",
+        results.len()
+    );
     Ok(())
 }

@@ -117,15 +117,28 @@ pub fn transcribe_to_file(
         )?
     };
 
-    // Create standard library channels for communication (not tokio async)
+    // Create standard library channels for communication (not tokio async).
+    //
+    // IMPORTANT: We intentionally run the ASR engine on the current thread (the same
+    // thread that created/loaded the Whisper model). Some device backends (notably Metal)
+    // can hang when a model is moved to a different thread for execution.
     let (audio_tx, audio_rx) = mpsc::channel::<AsrInput>();
     let (result_tx, result_rx) = mpsc::channel::<TranscriptionResult>();
 
-    // Spawn ASR engine in a thread
-    info!("Starting ASR engine");
-    let asr_task = std::thread::spawn(move || {
-        // Convert std::sync::mpsc to the blocking mpsc that AsrEngine expects
-        asr_engine.run_blocking(audio_rx, result_tx)
+    // Spawn SRT writing in a separate thread so we can keep streaming results to disk
+    // while the ASR engine runs on this thread.
+    let output_path = output_path.to_path_buf();
+    let writer_task = std::thread::spawn(move || -> Result<Subtitle> {
+        let mut writer = SrtWriter::create(&output_path)?;
+        let mut subtitle = Subtitle::new();
+
+        for result in result_rx {
+            writer.write_entry(result.start, result.end, &result.text)?;
+            subtitle.push(result.start, result.end, result.text);
+        }
+
+        writer.finish()?;
+        Ok(subtitle)
     });
 
     // Spawn audio extraction in a thread
@@ -133,27 +146,22 @@ pub fn transcribe_to_file(
         extract_and_stream_audio(audio_stream, audio_tx, progress_callback)
     });
 
-    // Create SRT writer and accumulate results in the main thread
-    let mut writer = SrtWriter::create(output_path)?;
-    let mut subtitle = Subtitle::new();
+    // Run ASR engine in this thread (blocking).
+    info!("Starting ASR engine (same thread as model)");
+    let asr_result = asr_engine.run_blocking(audio_rx, result_tx);
 
-    // Collect transcription results as they arrive (blocking)
-    for result in result_rx {
-        writer.write_entry(result.start, result.end, &result.text)?;
-        subtitle.push(result.start, result.end, result.text);
-    }
-
-    // Wait for audio extraction to complete
-    audio_task
+    // Join threads (always attempt to join so we don't leave threads running on error).
+    let audio_result = audio_task
         .join()
-        .map_err(|_| anyhow::anyhow!("Audio thread panicked"))??;
-
-    writer.finish()?;
-
-    // Wait for ASR engine to complete
-    asr_task
+        .map_err(|_| anyhow::anyhow!("Audio thread panicked"))?;
+    let subtitle_result = writer_task
         .join()
-        .map_err(|_| anyhow::anyhow!("ASR thread panicked"))??;
+        .map_err(|_| anyhow::anyhow!("SRT writer thread panicked"))?;
+
+    // Surface any errors from each stage.
+    asr_result?;
+    audio_result?;
+    let subtitle = subtitle_result?;
 
     info!("Transcription complete: {} segments", subtitle.len());
     Ok(subtitle)
@@ -204,5 +212,3 @@ fn extract_and_stream_audio(
 
     Ok(())
 }
-
-

@@ -1,0 +1,36 @@
+1
+00:00:00,720 --> 00:00:01,920
+I'm a wedding planner.
+
+2
+00:00:02,160 --> 00:00:04,440
+My job brings me a lot of pleasure.
+
+3
+00:00:04,770 --> 00:00:06,538
+Today is an amazing day.
+
+4
+00:00:06,538 --> 00:00:08,970
+I am planning my sisters wedding.
+
+5
+00:00:08,970 --> 00:00:11,770
+She will wear a beautiful white dress.
+
+6
+00:00:11,880 --> 00:00:14,080
+I also get to wear a lovely dress.
+
+7
+00:00:14,550 --> 00:00:19,310
+After the wedding, all the guests will have a nice dinner and will dance for hours.
+
+8
+00:00:19,830 --> 00:00:24,310
+In the evening, my sister and her new husband will cut a cake that I designed.
+
+9
+00:00:24,750 --> 00:00:26,350
+I hope they like it a lot.
+

@@ -78,13 +78,14 @@ pub fn extract_audio(
 
     // Get duration for progress tracking (in microseconds)
     let duration_us = ictx.duration();
-    let total_duration_us = if duration_us > 0 { duration_us as u64 } else { 0 };
+    let total_duration_us = if duration_us > 0 {
+        duration_us as u64
+    } else {
+        0
+    };
 
     // Check if there are video streams
-    let has_video = ictx
-        .streams()
-        .best(ffmpeg::media::Type::Video)
-        .is_some();
+    let has_video = ictx.streams().best(ffmpeg::media::Type::Video).is_some();
 
     // Find the best audio stream
     let audio_stream_index = ictx

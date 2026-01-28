@@ -82,21 +82,24 @@ async fn run(mut config: Config) -> Result<()> {
     let audio_stream = AudioStream::open(&config.input, None)
         .context("Failed to open audio stream from input file")?;
 
-    info!("Audio duration: {:.2} seconds", audio_stream.duration_secs());
+    info!(
+        "Audio duration: {:.2} seconds",
+        audio_stream.duration_secs()
+    );
 
     // Step 2: Transcribe with Whisper (fully blocking, no async)
     let output_path = config.output_path();
     info!("Transcribing to: {}", output_path.display());
 
-    let transcription_config = TranscriptionConfig {
-        model_size: config.model,
-        cache_dir: Some(config.cache_dir()),
-        device: config.device.to_candle_device()?,
-        language: config.language.clone(),
-        enable_vad: config.enable_vad,
-        vad_silence_secs: config.vad_reset_secs,
-        enable_hallucination_filter: true,
-    };
+    // NOTE: Create the candle device inside the blocking transcription task.
+    // Some backends (notably Metal) can be sensitive to cross-thread device/model usage.
+    let model_size = config.model;
+    let cache_dir = Some(config.cache_dir());
+    let selected_device = config.device;
+    let language = config.language.clone();
+    let enable_vad = config.enable_vad;
+    let vad_silence_secs = config.vad_reset_secs;
+    let enable_hallucination_filter = true;
 
     let progress_bar = create_progress_bar("Transcribing");
     let progress_callback = ProgressBarCallback::new(progress_bar);
@@ -104,6 +107,15 @@ async fn run(mut config: Config) -> Result<()> {
 
     // Run transcription in a blocking task since it's fully synchronous
     let subtitle = tokio::task::spawn_blocking(move || {
+        let transcription_config = TranscriptionConfig {
+            model_size,
+            cache_dir,
+            device: selected_device.to_candle_device()?,
+            language,
+            enable_vad,
+            vad_silence_secs,
+            enable_hallucination_filter,
+        };
         transcribe_to_file(
             audio_stream,
             &output_path_clone,
@@ -114,7 +126,11 @@ async fn run(mut config: Config) -> Result<()> {
     .await
     .context("Transcription task failed")??;
 
-    info!("Transcription complete: {} segments written to {}", subtitle.len(), output_path.display());
+    info!(
+        "Transcription complete: {} segments written to {}",
+        subtitle.len(),
+        output_path.display()
+    );
 
     // Step 3: Translate if requested (this needs async for HTTP requests)
     if let Some(ref target_lang) = config.translate {
@@ -207,7 +223,8 @@ impl ProgressCallback for ProgressBarCallback {
     }
 
     fn on_complete(&self) {
-        self.progress_bar.finish_with_message("Transcription complete");
+        self.progress_bar
+            .finish_with_message("Transcription complete");
     }
 }
 
