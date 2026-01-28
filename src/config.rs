@@ -55,72 +55,15 @@ pub enum Device {
 }
 
 impl Device {
-    /// Convert to candle device with automatic fallback.
-    /// For Auto mode: tries Metal (on macOS) -> CUDA -> CPU
-    /// For specific device: tries that device, falls back to CPU on failure
-    pub fn to_candle_device(&self) -> anyhow::Result<candle_core::Device> {
+    /// Get the device type name for display purposes
+    pub fn name(&self) -> &'static str {
         match self {
-            Self::Auto => Self::auto_select_device(),
-            Self::Cpu => Ok(candle_core::Device::Cpu),
+            Self::Auto => "auto",
+            Self::Cpu => "cpu",
             #[cfg(feature = "cuda")]
-            Self::Cuda => Self::try_cuda_with_fallback(),
+            Self::Cuda => "cuda",
             #[cfg(target_os = "macos")]
-            Self::Metal => Self::try_metal_with_fallback(),
-        }
-    }
-
-    /// Automatically select the best available device
-    fn auto_select_device() -> anyhow::Result<candle_core::Device> {
-        // Try Metal first (macOS with Apple Silicon)
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(device) = candle_core::Device::new_metal(0) {
-                tracing::info!("Using Metal GPU acceleration");
-                return Ok(device);
-            }
-            tracing::debug!("Metal not available, trying next option");
-        }
-
-        // Try CUDA (NVIDIA GPU)
-        #[cfg(feature = "cuda")]
-        {
-            if let Ok(device) = candle_core::Device::new_cuda(0) {
-                tracing::info!("Using CUDA GPU acceleration");
-                return Ok(device);
-            }
-            tracing::debug!("CUDA not available, trying next option");
-        }
-
-        // Fall back to CPU
-        tracing::info!("Using CPU for inference");
-        Ok(candle_core::Device::Cpu)
-    }
-
-    #[cfg(target_os = "macos")]
-    fn try_metal_with_fallback() -> anyhow::Result<candle_core::Device> {
-        match candle_core::Device::new_metal(0) {
-            Ok(device) => {
-                tracing::info!("Using Metal GPU acceleration");
-                Ok(device)
-            }
-            Err(e) => {
-                tracing::warn!("Metal not available ({}), falling back to CPU", e);
-                Ok(candle_core::Device::Cpu)
-            }
-        }
-    }
-
-    #[cfg(feature = "cuda")]
-    fn try_cuda_with_fallback() -> anyhow::Result<candle_core::Device> {
-        match candle_core::Device::new_cuda(0) {
-            Ok(device) => {
-                tracing::info!("Using CUDA GPU acceleration");
-                Ok(device)
-            }
-            Err(e) => {
-                tracing::warn!("CUDA not available ({}), falling back to CPU", e);
-                Ok(candle_core::Device::Cpu)
-            }
+            Self::Metal => "metal",
         }
     }
 }

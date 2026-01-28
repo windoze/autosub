@@ -5,7 +5,7 @@ use autosub_asr::{
     AsrEngine, AsrInput, TranscriptionResult, VadConfig, VadMode, WhisperModel, WhisperModelConfig,
     WhisperModelSize,
 };
-use candle_core::Device;
+use ort::execution_providers::{CoreMLExecutionProvider, CUDAExecutionProvider, CPUExecutionProvider};
 use tokio::sync::mpsc;
 
 /// Load WAV file and convert to f32 samples
@@ -34,7 +34,7 @@ fn test_asr_engine_short_audio() -> Result<()> {
     // Set up logging for debugging
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::DEBUG)
         .try_init();
 
     // Load test audio
@@ -47,18 +47,24 @@ fn test_asr_engine_short_audio() -> Result<()> {
     println!("Loaded {} samples", samples.len());
 
     // Load Whisper model (use tiny for faster tests)
-    let device = if cfg!(target_os = "macos") {
-        Device::new_metal(0).unwrap_or(Device::Cpu)
+    let execution_providers = if cfg!(target_os = "macos") {
+        vec![
+            CoreMLExecutionProvider::default().build(),
+            CPUExecutionProvider::default().build(),
+        ]
     } else if cfg!(feature = "cuda") {
-        Device::new_cuda(0).unwrap_or(Device::Cpu)
+        vec![
+            CUDAExecutionProvider::default().build(),
+            CPUExecutionProvider::default().build(),
+        ]
     } else {
-        Device::Cpu
+        vec![CPUExecutionProvider::default().build()]
     };
 
     let config = WhisperModelConfig {
         model_size: WhisperModelSize::Tiny,
         cache_dir: None,
-        device,
+        execution_providers,
     };
 
     println!("Loading Whisper Tiny model...");
@@ -149,18 +155,24 @@ fn test_asr_engine_longer_audio() -> Result<()> {
     println!("Loaded {} samples", samples.len());
 
     // Load Whisper model
-    let device = if cfg!(target_os = "macos") {
-        Device::new_metal(0).unwrap_or(Device::Cpu)
+    let execution_providers = if cfg!(target_os = "macos") {
+        vec![
+            CoreMLExecutionProvider::default().build(),
+            CPUExecutionProvider::default().build(),
+        ]
     } else if cfg!(feature = "cuda") {
-        Device::new_cuda(0).unwrap_or(Device::Cpu)
+        vec![
+            CUDAExecutionProvider::default().build(),
+            CPUExecutionProvider::default().build(),
+        ]
     } else {
-        Device::Cpu
+        vec![CPUExecutionProvider::default().build()]
     };
 
     let config = WhisperModelConfig {
         model_size: WhisperModelSize::Tiny,
         cache_dir: None,
-        device,
+        execution_providers,
     };
 
     println!("Loading Whisper Tiny model...");
@@ -235,18 +247,24 @@ fn test_vad_segmentation() -> Result<()> {
 
     let samples = load_wav_samples(test_file.to_str().unwrap())?;
 
-    let device = if cfg!(target_os = "macos") {
-        Device::new_metal(0).unwrap_or(Device::Cpu)
+    let execution_providers = if cfg!(target_os = "macos") {
+        vec![
+            CoreMLExecutionProvider::default().build(),
+            CPUExecutionProvider::default().build(),
+        ]
     } else if cfg!(feature = "cuda") {
-        Device::new_cuda(0).unwrap_or(Device::Cpu)
+        vec![
+            CUDAExecutionProvider::default().build(),
+            CPUExecutionProvider::default().build(),
+        ]
     } else {
-        Device::Cpu
+        vec![CPUExecutionProvider::default().build()]
     };
 
     let config = WhisperModelConfig {
         model_size: WhisperModelSize::Tiny,
         cache_dir: None,
-        device,
+        execution_providers,
     };
 
     let model = WhisperModel::load(config)?;
@@ -317,18 +335,24 @@ fn test_multi_segment_audio() -> Result<()> {
     let samples = load_wav_samples(test_file.to_str().unwrap())?;
     println!("Loaded {} samples", samples.len());
 
-    let device = if cfg!(target_os = "macos") {
-        Device::new_metal(0).unwrap_or(Device::Cpu)
+    let execution_providers = if cfg!(target_os = "macos") {
+        vec![
+            CoreMLExecutionProvider::default().build(),
+            CPUExecutionProvider::default().build(),
+        ]
     } else if cfg!(feature = "cuda") {
-        Device::new_cuda(0).unwrap_or(Device::Cpu)
+        vec![
+            CUDAExecutionProvider::default().build(),
+            CPUExecutionProvider::default().build(),
+        ]
     } else {
-        Device::Cpu
+        vec![CPUExecutionProvider::default().build()]
     };
 
     let config = WhisperModelConfig {
         model_size: WhisperModelSize::Tiny,
         cache_dir: None,
-        device,
+        execution_providers,
     };
 
     println!("Loading Whisper Tiny model...");

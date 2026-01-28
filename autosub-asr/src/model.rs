@@ -2,14 +2,20 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use candle_core::{Device, Tensor};
-use candle_nn::VarBuilder;
-use candle_transformers::models::whisper::{self as m, audio, Config};
 use hf_hub::api::sync::Api;
+use ndarray::{Array3, ArrayD};
+use ort::{
+    execution_providers::ExecutionProviderDispatch, session::builder::GraphOptimizationLevel,
+    session::{Session, SessionInputValue},
+    value::Value as OrtValue,
+};
+use serde::{Deserialize, Serialize};
 use std::sync::mpsc as std_mpsc;
 use tokenizers::Tokenizer;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+use crate::audio::{pcm_to_mel, AudioConfig};
 
 use crate::filter::HallucinationFilter;
 use crate::types::{AsrInput, AudioClip, TranscriptionResult};
@@ -43,6 +49,13 @@ struct DecodedSegment {
     tokens: Vec<u32>,
 }
 
+/// Whisper model configuration from HuggingFace
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub num_mel_bins: usize,
+    pub max_target_positions: usize,
+}
+
 /// Configuration for loading a Whisper model
 #[derive(Debug, Clone)]
 pub struct WhisperModelConfig {
@@ -50,8 +63,8 @@ pub struct WhisperModelConfig {
     pub model_size: WhisperModelSize,
     /// Optional cache directory for model files
     pub cache_dir: Option<PathBuf>,
-    /// Device to run the model on
-    pub device: Device,
+    /// Execution providers for ONNX Runtime (e.g., CoreML, CUDA, CPU)
+    pub execution_providers: Vec<ExecutionProviderDispatch>,
 }
 
 /// Whisper model size variants
@@ -67,34 +80,34 @@ pub enum WhisperModelSize {
 impl WhisperModelSize {
     pub fn repo_id(&self) -> &'static str {
         match self {
-            Self::Tiny => "openai/whisper-tiny",
-            Self::Base => "openai/whisper-base",
-            Self::Small => "openai/whisper-small",
-            Self::Medium => "openai/whisper-medium",
-            Self::Large => "openai/whisper-large-v3",
+            Self::Tiny => "onnx-community/whisper-tiny",
+            Self::Base => "onnx-community/whisper-base",
+            Self::Small => "onnx-community/whisper-small",
+            Self::Medium => "onnx-community/whisper-medium",
+            Self::Large => "onnx-community/whisper-large-v3",
         }
     }
 }
 
-/// Core Whisper model for ASR
+/// Core Whisper model for ASR using ONNX Runtime
 pub struct WhisperModel {
-    model: m::model::Whisper,
+    encoder_session: Session,
+    decoder_session: Session,
     tokenizer: Tokenizer,
     config: Config,
-    device: Device,
     mel_filters: Vec<f32>,
 }
 
 impl WhisperModel {
-    /// Download and load a Whisper model
+    /// Download and load a Whisper ONNX model
     pub fn load(config: WhisperModelConfig) -> Result<Self> {
-        info!("Loading Whisper {:?} model...", config.model_size);
+        info!("Loading Whisper {:?} ONNX model...", config.model_size);
 
         let api = Api::new().context("Failed to create HuggingFace API")?;
         let api_repo = api.model(config.model_size.repo_id().to_string());
 
         // Download model files
-        info!("Downloading model files (this may take a while on first run)...");
+        info!("Downloading ONNX model files (this may take a while on first run)...");
 
         let config_path = api_repo
             .get("config.json")
@@ -102,13 +115,21 @@ impl WhisperModel {
         let tokenizer_path = api_repo
             .get("tokenizer.json")
             .context("Failed to download tokenizer.json")?;
-        let weights_path = api_repo
-            .get("model.safetensors")
-            .context("Failed to download model.safetensors")?;
+
+        // Try to get decoder_model.onnx first (simpler, no KV cache), fall back to decoder_model_merged.onnx
+        let decoder_path = api_repo
+            .get("onnx/decoder_model.onnx")
+            .or_else(|_| api_repo.get("onnx/decoder_model_merged.onnx"))
+            .context("Failed to download decoder model (tried decoder_model.onnx and decoder_model_merged.onnx)")?;
+
+        let encoder_path = api_repo
+            .get("onnx/encoder_model.onnx")
+            .context("Failed to download encoder_model.onnx")?;
 
         debug!("Config: {}", config_path.display());
         debug!("Tokenizer: {}", tokenizer_path.display());
-        debug!("Weights: {}", weights_path.display());
+        debug!("Encoder: {}", encoder_path.display());
+        debug!("Decoder: {}", decoder_path.display());
 
         // Load config
         let model_config: Config = serde_json::from_str(
@@ -120,18 +141,26 @@ impl WhisperModel {
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
-        // Load model weights
-        let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[weights_path],
-                candle_core::DType::F32,
-                &config.device,
-            )
-            .context("Failed to load model weights")?
-        };
+        // Create ONNX Runtime sessions
+        info!("Creating ONNX Runtime sessions");
 
-        let model = m::model::Whisper::load(&vb, model_config.clone())
-            .context("Failed to create Whisper model")?;
+        let mut session_builder = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?;
+
+        // Apply execution providers
+        if !config.execution_providers.is_empty() {
+            session_builder = session_builder
+                .with_execution_providers(config.execution_providers.clone())?;
+        }
+
+        let encoder_session = session_builder
+            .clone()
+            .commit_from_file(&encoder_path)
+            .context("Failed to load encoder ONNX model")?;
+
+        let decoder_session = session_builder
+            .commit_from_file(&decoder_path)
+            .context("Failed to load decoder ONNX model")?;
 
         // Load pre-computed mel filters based on model config
         let mel_bytes = match model_config.num_mel_bins {
@@ -142,13 +171,13 @@ impl WhisperModel {
         let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
         LittleEndian::read_f32_into(mel_bytes, &mut mel_filters);
 
-        info!("Model loaded successfully (device: {:?})", config.device);
+        info!("ONNX model loaded successfully");
 
         Ok(Self {
-            model,
+            encoder_session,
+            decoder_session,
             tokenizer,
             config: model_config,
-            device: config.device,
             mel_filters,
         })
     }
@@ -167,38 +196,76 @@ impl WhisperModel {
             return Ok(Vec::new());
         }
 
-        // Only reset KV cache when explicitly signaled (after long silence)
-        // This preserves context across consecutive VAD segments for better accuracy
+        // Note: ONNX decoder models handle KV cache internally
+        // reset_context flag is noted but doesn't require explicit cache reset
         if clip.reset_context {
-            debug!("Resetting ASR context due to long silence");
-            self.model.reset_kv_cache();
+            debug!("Context reset signaled (handled by ONNX model)");
         }
 
-        let mel = audio::pcm_to_mel(&self.config, &clip.samples, &self.mel_filters);
+        // Convert PCM to mel spectrogram
+        let audio_config = AudioConfig { num_mel_bins: n_mels };
+        let mel = pcm_to_mel(&audio_config, &clip.samples, &self.mel_filters);
         let mel_len = mel.len();
         let content_frames = mel_len / n_mels;
 
+        info!("Transcribe: {} samples -> {} bins x {} frames", clip.samples.len(), n_mels, content_frames);
+
         if content_frames == 0 {
+            warn!("No content frames, returning empty");
             return Ok(Vec::new());
         }
 
-        let mel = Tensor::from_vec(mel, (1, n_mels, content_frames), &self.device)?;
+        // Reshape mel spectrogram to 3D tensor [batch, n_mels, frames]
+        let mut mel_array = Array3::<f32>::zeros((1, n_mels, content_frames));
+        for i in 0..n_mels {
+            for j in 0..content_frames {
+                mel_array[[0, i, j]] = mel[i * content_frames + j];
+            }
+        }
 
         // Pad or truncate to N_FRAMES
-        let mel = if content_frames < N_FRAMES {
-            let padding = Tensor::zeros(
-                (1, n_mels, N_FRAMES - content_frames),
-                candle_core::DType::F32,
-                &self.device,
-            )?;
-            Tensor::cat(&[&mel, &padding], 2)?
+        let mel_array = if content_frames < N_FRAMES {
+            let mut padded = Array3::<f32>::zeros((1, n_mels, N_FRAMES));
+            padded.slice_mut(ndarray::s![.., .., ..content_frames]).assign(&mel_array);
+            padded
         } else if content_frames > N_FRAMES {
-            mel.narrow(2, 0, N_FRAMES)?
+            mel_array.slice(ndarray::s![.., .., ..N_FRAMES]).to_owned()
         } else {
-            mel
+            mel_array
         };
 
-        let audio_features = self.model.encoder.forward(&mel, true)?;
+        // Run encoder to get audio features
+        // Convert array to tuple format: (shape, data)
+        let mel_shape = mel_array.shape().to_vec();
+        let (mel_data, _offset) = mel_array.into_raw_vec_and_offset();
+
+        // Check mel spectrogram statistics
+        let mel_min = mel_data.iter().copied().fold(f32::INFINITY, f32::min);
+        let mel_max = mel_data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let mel_mean = mel_data.iter().sum::<f32>() / mel_data.len() as f32;
+        info!("Mel stats: min={:.2}, max={:.2}, mean={:.2}", mel_min, mel_max, mel_mean);
+
+        let mel_value = OrtValue::from_array((mel_shape, mel_data))?;
+
+        let audio_features = {
+            // Use positional inputs for ONNX encoder (onnx-community models)
+            let encoder_outputs = self.encoder_session
+                .run([SessionInputValue::from(mel_value)])
+                .context("Failed to run encoder")?;
+
+            let (audio_features_shape, audio_features_data) = encoder_outputs[0]
+                .try_extract_tensor::<f32>()?;
+
+            // Convert to ArrayD for easier handling
+            let shape_vec: Vec<usize> = audio_features_shape.as_ref().iter().map(|&d| d as usize).collect();
+            let data_vec = audio_features_data.to_vec();
+            let features = ArrayD::from_shape_vec(shape_vec, data_vec)?;
+
+            // Check encoder output
+            let first_10: Vec<f32> = features.iter().take(10).copied().collect();
+            info!("Encoder output shape: {:?}, sample values: {:?}", features.shape(), first_10);
+            features
+        };
 
         let segments =
             self.decode_segment_with_timestamps(&audio_features, language, initial_prompt)?;
@@ -258,7 +325,7 @@ impl WhisperModel {
     /// Decode a segment with timestamps, returning multiple timed segments
     fn decode_segment_with_timestamps(
         &mut self,
-        audio_features: &Tensor,
+        audio_features: &ndarray::ArrayD<f32>,
         language: Option<&str>,
         initial_prompt: Option<&str>,
     ) -> Result<Vec<DecodedSegment>> {
@@ -294,25 +361,85 @@ impl WhisperModel {
         // Add first timestamp <|0.00|>
         tokens.push(TIMESTAMP_BEGIN);
 
+        info!("Initial decoder tokens: {:?} (SOT={}, lang={}, transcribe={}, timestamp_begin={})",
+            tokens, sot_token, language_token, transcribe_token, TIMESTAMP_BEGIN);
+
         let sample_len = self.config.max_target_positions / 2;
         let mut all_tokens = vec![TIMESTAMP_BEGIN];
 
-        for i in 0..sample_len {
-            let tokens_tensor = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
+        // NOTE: We don't use a KV cache yet. This greedy decoding path re-runs the decoder for every
+        // generated token. To keep overhead reasonable (especially on CoreML), we must avoid
+        // re-materializing the (large) encoder_hidden_states tensor every step.
+        let features_shape = audio_features.shape().to_vec();
+        let features_data = audio_features.iter().copied().collect::<Vec<f32>>();
+        let features_value_f32 = OrtValue::from_array((features_shape.clone(), features_data))?;
 
-            let ys = self
-                .model
-                .decoder
-                .forward(&tokens_tensor, audio_features, i == 0)?;
+        for _ in 0..sample_len {
+            // Create tokens tensor [1, seq_len]
+            let tokens_i64: Vec<i64> = tokens.iter().map(|&t| t as i64).collect();
+            let tokens_shape = vec![1, tokens.len()];
+            let tokens_value = OrtValue::from_array((tokens_shape.clone(), tokens_i64))?;
 
-            let (_, seq_len, _) = ys.dims3()?;
-            let ys_last = ys.narrow(1, seq_len - 1, 1)?;
-            let logits = self.model.decoder.final_linear(&ys_last)?;
-            let logits = logits.squeeze(0)?.squeeze(0)?;
+            // Debug on first iteration
+            if all_tokens.len() == 1 {
+                info!("Decoder input shapes: tokens={:?}, features={:?}",
+                    tokens_shape, features_shape);
+            }
 
-            let next_token = logits.argmax(0)?.to_scalar::<u32>()?;
+            // Run decoder with positional inputs: [input_ids (i64), encoder_hidden_states (f32)]
+            let decoder_outputs = self.decoder_session
+                .run([
+                    SessionInputValue::from(tokens_value),
+                    SessionInputValue::from(&features_value_f32),
+                ])
+                .context("Failed to run decoder")?;
+
+            // Get logits from output
+            let (logits_shape, logits_data) = decoder_outputs[0]
+                .try_extract_tensor::<f32>()?;
+
+            // Debug on first iteration
+            if all_tokens.len() == 1 {
+                info!("Decoder output logits shape: {:?}, total elements: {}",
+                    logits_shape, logits_data.len());
+            }
+
+            // Get last token's logits [vocab_size]
+            let seq_len = tokens.len();
+            let vocab_size = logits_shape[2] as usize;
+            let last_logits_start = (seq_len - 1) * vocab_size;
+            let last_logits_end = last_logits_start + vocab_size;
+            let last_logits = &logits_data[last_logits_start..last_logits_end];
+
+            // Find token with highest probability (argmax)
+            let next_token = last_logits
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .map(|(idx, _)| idx as u32)
+                .ok_or_else(|| anyhow::anyhow!("Failed to get next token"))?;
+
+            // Debug: show top 5 tokens on first iteration
+            if all_tokens.len() == 1 {
+                let mut top_tokens: Vec<(usize, f32)> = last_logits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &v)| (i, v))
+                    .collect();
+                top_tokens.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                info!("Top 5 predicted tokens: {:?}", &top_tokens[..5.min(top_tokens.len())]);
+            }
+
+            if all_tokens.len() < 5 {
+                info!("Token {}: {} (is_timestamp={}, is_text={}, EOT={})",
+                    all_tokens.len(), next_token,
+                    is_timestamp_token(next_token),
+                    next_token < 50257,
+                    eot_token);
+            }
 
             if next_token == eot_token {
+                info!("Hit EOT token at position {}, stopping", all_tokens.len());
                 break;
             }
 
@@ -336,7 +463,11 @@ impl WhisperModel {
             }
         }
 
+        info!("Decoder generated {} tokens: {:?}", all_tokens.len(), &all_tokens[..all_tokens.len().min(20)]);
+
         let segments = self.parse_timestamped_tokens(&all_tokens);
+        info!("Parsed {} segments from tokens", segments.len());
+
         Ok(segments)
     }
 
@@ -384,26 +515,46 @@ impl WhisperModel {
     }
 
     /// Auto-detect language from audio features
-    fn detect_language(&mut self, audio_features: &Tensor) -> Result<u32> {
+    fn detect_language(&mut self, audio_features: &ArrayD<f32>) -> Result<u32> {
         let sot_token = self.token_id("<|startoftranscript|>")?;
 
-        let tokens = Tensor::new(&[sot_token], &self.device)?.unsqueeze(0)?;
-        let ys = self.model.decoder.forward(&tokens, audio_features, true)?;
+        // Create tokens tensor [1, 1]
+        let tokens_shape = vec![1, 1];
+        let tokens_data = vec![sot_token as i64];
+        let tokens_value = OrtValue::from_array((tokens_shape, tokens_data))?;
 
-        let (_, seq_len, _) = ys.dims3()?;
-        let ys_last = ys.narrow(1, seq_len - 1, 1)?;
-        let logits = self.model.decoder.final_linear(&ys_last)?;
-        let logits = logits.squeeze(0)?.squeeze(0)?;
+        let features_shape = audio_features.shape().to_vec();
+        let features_data = audio_features.iter().copied().collect::<Vec<f32>>();
+        let features_value = OrtValue::from_array((features_shape, features_data))?;
 
+        // Create use_cache_branch input (0 = don't use KV cache)
+        let use_cache = OrtValue::from_array((vec![1], vec![0i64]))?;
+
+        // Run decoder with single SOT token and extract logits data
+        let last_logits = {
+            let decoder_outputs = self.decoder_session
+                .run([
+                    SessionInputValue::from(tokens_value),
+                    SessionInputValue::from(&features_value),
+                    SessionInputValue::from(use_cache),
+                ])
+                .context("Failed to run decoder for language detection")?;
+
+            // Get logits
+            let (_logits_shape, logits_data) = decoder_outputs[0]
+                .try_extract_tensor::<f32>()?;
+            logits_data.to_vec()
+        };
+
+        // Language tokens are in range 50259-50358
         let lang_token_start = 50259u32;
         let lang_token_end = 50358u32;
 
-        let logits_vec: Vec<f32> = logits.to_vec1()?;
         let mut best_lang_token = self.token_id("<|en|>")?;
         let mut best_prob = f32::NEG_INFINITY;
 
         for token_id in lang_token_start..=lang_token_end {
-            if let Some(&prob) = logits_vec.get(token_id as usize) {
+            if let Some(&prob) = last_logits.get(token_id as usize) {
                 if prob > best_prob {
                     best_prob = prob;
                     best_lang_token = token_id;
@@ -414,8 +565,6 @@ impl WhisperModel {
         if let Some(lang_str) = self.tokenizer.id_to_token(best_lang_token) {
             debug!("Detected language: {}", lang_str);
         }
-
-        self.model.reset_kv_cache();
 
         Ok(best_lang_token)
     }

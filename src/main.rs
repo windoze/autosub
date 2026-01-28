@@ -91,8 +91,8 @@ async fn run(mut config: Config) -> Result<()> {
     let output_path = config.output_path();
     info!("Transcribing to: {}", output_path.display());
 
-    // NOTE: Create the candle device inside the blocking transcription task.
-    // Some backends (notably Metal) can be sensitive to cross-thread device/model usage.
+    // NOTE: ONNX Runtime handles device/model usage across threads automatically.
+    // No special cross-thread considerations needed like with Candle.
     let model_size = config.model;
     let cache_dir = Some(config.cache_dir());
     let selected_device = config.device;
@@ -110,7 +110,7 @@ async fn run(mut config: Config) -> Result<()> {
         let transcription_config = TranscriptionConfig {
             model_size,
             cache_dir,
-            device: selected_device.to_candle_device()?,
+            device: selected_device,
             language,
             enable_vad,
             vad_silence_secs,

@@ -7,10 +7,14 @@ use autosub_asr::{
     WhisperModel, WhisperModelConfig, WhisperModelSize,
 };
 use autosub_audio::AudioStream;
-use candle_core::Device;
+use ort::execution_providers::{
+    CoreMLExecutionProvider, CPUExecutionProvider, ExecutionProviderDispatch,
+};
+#[cfg(feature = "cuda")]
+use ort::execution_providers::CUDAExecutionProvider;
 use tracing::{debug, info};
 
-use crate::config::WhisperModelSize as ConfigModelSize;
+use crate::config::{Device, WhisperModelSize as ConfigModelSize};
 use crate::srt::{SrtWriter, Subtitle};
 
 /// Configuration for transcription
@@ -23,6 +27,45 @@ pub struct TranscriptionConfig {
     pub enable_vad: bool,
     pub vad_silence_secs: f32,
     pub enable_hallucination_filter: bool,
+}
+
+impl Device {
+    /// Convert Device enum to ONNX Runtime execution providers
+    fn to_execution_providers(&self) -> Vec<ExecutionProviderDispatch> {
+        match self {
+            Self::Auto => {
+                #[cfg(target_os = "macos")]
+                {
+                    vec![
+                        CoreMLExecutionProvider::default().build(),
+                        CPUExecutionProvider::default().build(),
+                    ]
+                }
+                #[cfg(all(feature = "cuda", not(target_os = "macos")))]
+                {
+                    vec![
+                        CUDAExecutionProvider::default().build(),
+                        CPUExecutionProvider::default().build(),
+                    ]
+                }
+                #[cfg(not(any(target_os = "macos", feature = "cuda")))]
+                {
+                    vec![CPUExecutionProvider::default().build()]
+                }
+            }
+            Self::Cpu => vec![CPUExecutionProvider::default().build()],
+            #[cfg(feature = "cuda")]
+            Self::Cuda => vec![
+                CUDAExecutionProvider::default().build(),
+                CPUExecutionProvider::default().build(),
+            ],
+            #[cfg(target_os = "macos")]
+            Self::Metal => vec![
+                CoreMLExecutionProvider::default().build(),
+                CPUExecutionProvider::default().build(),
+            ],
+        }
+    }
 }
 
 /// Progress callback trait for reporting transcription progress
@@ -72,13 +115,14 @@ pub fn transcribe_to_file(
     config: TranscriptionConfig,
     progress_callback: Option<Box<dyn ProgressCallback>>,
 ) -> Result<Subtitle> {
-    info!("Loading Whisper model ({:?})...", config.model_size);
+    info!("Loading Whisper model ({:?}) on device: {}...", config.model_size, config.device.name());
 
-    // Load the Whisper model
+    // Load the Whisper model with ONNX Runtime
+    let execution_providers = config.device.to_execution_providers();
     let model_config = WhisperModelConfig {
         model_size: convert_model_size(config.model_size),
         cache_dir: config.cache_dir,
-        device: config.device,
+        execution_providers,
     };
     let model = WhisperModel::load(model_config)?;
 
