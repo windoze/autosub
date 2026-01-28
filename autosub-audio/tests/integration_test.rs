@@ -77,7 +77,7 @@ async fn test_audio_stream_with_asr() {
     println!("Expected text: {}", expected_text);
 
     // Open audio stream with default config (16kHz, 30s chunks)
-    let mut audio_stream = AudioStream::open(&test_video, Some(StreamConfig::default()))
+    let audio_stream = AudioStream::open(&test_video, Some(StreamConfig::default()))
         .expect("Failed to open audio stream");
 
     let file_info = audio_stream.file_info();
@@ -113,6 +113,7 @@ async fn test_audio_stream_with_asr() {
     let asr_engine = AsrEngine::with_filter(
         model,
         Some("en".to_string()),
+        None, // No initial prompt
         vad_config,
         Some(Box::new(NoFilter)),
     )
@@ -129,7 +130,7 @@ async fn test_audio_stream_with_asr() {
     // Spawn audio processing in a thread
     let audio_task = std::thread::spawn(move || {
         let mut segment_count = 0;
-        while let Some(segment_result) = audio_stream.next() {
+        for segment_result in audio_stream {
             let segment = segment_result.expect("Failed to read audio segment");
             segment_count += 1;
 
@@ -228,7 +229,7 @@ fn test_audio_stream_basic() {
     }
 
     // Open audio stream
-    let mut audio_stream = AudioStream::open(&test_video, None).expect("Failed to open audio stream");
+    let audio_stream = AudioStream::open(&test_video, None).expect("Failed to open audio stream");
 
     let file_info = audio_stream.file_info();
     assert!(file_info.duration_secs > 0.0, "Duration should be positive");
@@ -240,7 +241,7 @@ fn test_audio_stream_basic() {
 
     // Read at least one segment
     let mut segment_count = 0;
-    while let Some(segment_result) = audio_stream.next() {
+    for segment_result in audio_stream {
         let segment = segment_result.expect("Failed to read segment");
         segment_count += 1;
 

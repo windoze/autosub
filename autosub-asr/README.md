@@ -12,6 +12,7 @@ This crate provides a clean, channel-based interface for speech recognition. It'
 - **Pure ASR logic**: No file I/O, no progress bars, no CLI dependencies
 - **Whisper model support**: Tiny, Base, Small, Medium, and Large variants
 - **Language detection**: Auto-detect or specify language
+- **Initial prompt support**: Guide the model with context to improve transcription quality
 - **Pluggable hallucination filtering**: Customizable filtering via plugin system
 - **Sentence segmentation**: Automatically split long segments into sentences
 - **Voice Activity Detection (VAD)**: Built-in WebRTC VAD for speech segmentation
@@ -107,8 +108,18 @@ let engine = AsrEngine::new(model, Some("en".to_string()), vad_config)?;
 let engine = AsrEngine::with_filter(
     model,
     Some("en".to_string()),
+    None, // No initial prompt
     vad_config,
     Some(Box::new(NoFilter)),
+)?;
+
+// Use with initial prompt to guide the model
+let engine = AsrEngine::with_filter(
+    model,
+    Some("en".to_string()),
+    Some("Technical discussion about machine learning and artificial intelligence.".to_string()),
+    vad_config,
+    Some(Box::new(DefaultHallucinationFilter::new())),
 )?;
 
 // Use custom filter
@@ -123,12 +134,49 @@ impl HallucinationFilter for MyCustomFilter {
 let engine = AsrEngine::with_filter(
     model,
     Some("en".to_string()),
+    None, // No initial prompt
     vad_config,
     Some(Box::new(MyCustomFilter)),
 )?;
 ```
 
 **Note**: The default filter may occasionally produce false positives (filtering valid text). If you need complete transcription output, use `NoFilter` or implement a custom filter tuned to your use case.
+
+### Initial Prompt
+
+You can provide an initial prompt to guide the Whisper model and improve transcription quality. The initial prompt helps the model understand the context, expected terminology, and speaking style of the audio.
+
+**Benefits of using an initial prompt:**
+- Improves recognition of domain-specific terminology
+- Helps maintain consistent spelling and formatting
+- Can guide the model on expected speaking style
+- Useful for technical content, names, or specialized vocabulary
+
+**Example use cases:**
+```rust
+// For technical discussions
+let prompt = Some("This is a technical discussion about machine learning, neural networks, and artificial intelligence.".to_string());
+
+// For medical content
+let prompt = Some("Medical terminology: diagnosis, treatment, patient care.".to_string());
+
+// For names and proper nouns
+let prompt = Some("Interview with Dr. Jane Smith about her research.".to_string());
+
+let engine = AsrEngine::with_filter(
+    model,
+    Some("en".to_string()),
+    prompt,
+    vad_config,
+    Some(Box::new(DefaultHallucinationFilter::new())),
+)?;
+```
+
+**Tips:**
+- Keep prompts relevant to your audio content
+- Include key terminology or names you expect to appear
+- The prompt should be in the same language as the audio
+- Prompts work best when they match the speaking style and context
 
 ## Usage Example
 

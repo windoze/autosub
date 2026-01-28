@@ -156,6 +156,7 @@ impl WhisperModel {
         &mut self,
         clip: &AudioClip,
         language: Option<&str>,
+        initial_prompt: Option<&str>,
         filter: Option<&dyn HallucinationFilter>,
     ) -> Result<Vec<TranscriptionResult>> {
         let n_mels = self.config.num_mel_bins;
@@ -197,7 +198,7 @@ impl WhisperModel {
 
         let audio_features = self.model.encoder.forward(&mel, true)?;
 
-        let segments = self.decode_segment_with_timestamps(&audio_features, language)?;
+        let segments = self.decode_segment_with_timestamps(&audio_features, language, initial_prompt)?;
 
         let mut results = Vec::new();
         let mut last_end_time = 0.0_f64;
@@ -256,6 +257,7 @@ impl WhisperModel {
         &mut self,
         audio_features: &Tensor,
         language: Option<&str>,
+        initial_prompt: Option<&str>,
     ) -> Result<Vec<DecodedSegment>> {
         // Get special token IDs
         let sot_token = self.token_id("<|startoftranscript|>")?;
@@ -270,8 +272,24 @@ impl WhisperModel {
             self.detect_language(audio_features)?
         };
 
-        // Initial tokens: SOT, language, transcribe, and first timestamp <|0.00|>
-        let mut tokens = vec![sot_token, language_token, transcribe_token, TIMESTAMP_BEGIN];
+        // Initial tokens: SOT, language, transcribe
+        let mut tokens = vec![sot_token, language_token, transcribe_token];
+
+        // Add initial prompt tokens if provided
+        if let Some(prompt_text) = initial_prompt {
+            if let Ok(encoding) = self.tokenizer.encode(prompt_text, false) {
+                let prompt_tokens: Vec<u32> = encoding.get_ids().to_vec();
+                // Only add prompt tokens that are valid (< 50257, not special tokens)
+                for &token in &prompt_tokens {
+                    if token < 50257 {
+                        tokens.push(token);
+                    }
+                }
+            }
+        }
+
+        // Add first timestamp <|0.00|>
+        tokens.push(TIMESTAMP_BEGIN);
 
         let sample_len = self.config.max_target_positions / 2;
         let mut all_tokens = vec![TIMESTAMP_BEGIN];
@@ -416,6 +434,7 @@ impl WhisperModel {
 pub struct AsrEngine {
     model: WhisperModel,
     language: Option<String>,
+    initial_prompt: Option<String>,
     segmenter: VadSegmenter<WebRtcVad>,
     filter: Option<Box<dyn crate::filter::HallucinationFilter>>,
 }
@@ -431,6 +450,7 @@ impl AsrEngine {
         Self::with_filter(
             model,
             language,
+            None,
             vad_config,
             Some(Box::new(crate::filter::DefaultHallucinationFilter::new())),
         )
@@ -441,11 +461,13 @@ impl AsrEngine {
     /// # Arguments
     /// * `model` - Whisper model to use for transcription
     /// * `language` - Optional language code (e.g., "en")
+    /// * `initial_prompt` - Optional initial prompt to guide the model (helps with context, terminology, and style)
     /// * `vad_config` - Voice activity detection configuration
     /// * `filter` - Optional custom hallucination filter (None = no filtering)
     pub fn with_filter(
         model: WhisperModel,
         language: Option<String>,
+        initial_prompt: Option<String>,
         vad_config: VadConfig,
         filter: Option<Box<dyn crate::filter::HallucinationFilter>>,
     ) -> Result<Self> {
@@ -464,6 +486,7 @@ impl AsrEngine {
         Ok(Self {
             model,
             language,
+            initial_prompt,
             segmenter,
             filter,
         })
@@ -522,7 +545,7 @@ impl AsrEngine {
                 );
 
                 info!("Starting Whisper transcription for segment {}...", idx + 1);
-                let results = self.model.transcribe_clip(&clip, self.language.as_deref(), self.filter.as_deref())?;
+                let results = self.model.transcribe_clip(clip, self.language.as_deref(), self.initial_prompt.as_deref(), self.filter.as_deref())?;
                 info!("Whisper transcription completed for segment {}, got {} results", idx + 1, results.len());
 
                 for result in results {
