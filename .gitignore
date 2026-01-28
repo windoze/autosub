@@ -3,3 +3,4 @@
 /test
 .envrc*
 .DS_Store
+.venv
