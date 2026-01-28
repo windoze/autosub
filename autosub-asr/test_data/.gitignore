@@ -1,0 +1,8 @@
+# Ignore everything
+*
+
+# Except these files
+!*.wav
+!generate_sample.sh
+!README.md
+!.gitignore
