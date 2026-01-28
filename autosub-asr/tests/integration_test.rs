@@ -49,7 +49,7 @@ fn test_asr_engine_short_audio() -> Result<()> {
     println!("Loaded {} samples", samples.len());
 
     // Load Whisper model (use tiny for faster tests)
-    let device = if cfg!(feature = "metal") && cfg!(target_os = "macos") {
+    let device = if cfg!(target_os = "macos") {
         Device::new_metal(0).unwrap_or(Device::Cpu)
     } else if cfg!(feature = "cuda") {
         Device::new_cuda(0).unwrap_or(Device::Cpu)
@@ -151,7 +151,7 @@ fn test_asr_engine_longer_audio() -> Result<()> {
     println!("Loaded {} samples", samples.len());
 
     // Load Whisper model
-    let device = if cfg!(feature = "metal") && cfg!(target_os = "macos") {
+    let device = if cfg!(target_os = "macos") {
         Device::new_metal(0).unwrap_or(Device::Cpu)
     } else if cfg!(feature = "cuda") {
         Device::new_cuda(0).unwrap_or(Device::Cpu)
@@ -237,7 +237,7 @@ fn test_vad_segmentation() -> Result<()> {
 
     let samples = load_wav_samples(test_file.to_str().unwrap())?;
 
-    let device = if cfg!(feature = "metal") && cfg!(target_os = "macos") {
+    let device = if cfg!(target_os = "macos") {
         Device::new_metal(0).unwrap_or(Device::Cpu)
     } else if cfg!(feature = "cuda") {
         Device::new_cuda(0).unwrap_or(Device::Cpu)

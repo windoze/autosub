@@ -124,6 +124,7 @@ name = "autosub"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "autosub-asr",
  "bytemuck",
  "byteorder",
  "candle-core",
@@ -132,7 +133,6 @@ dependencies = [
  "clap",
  "dirs",
  "ffmpeg-next",
- "hf-hub",
  "hound",
  "indicatif 0.18.3",
  "libc",
@@ -142,10 +142,28 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.17",
- "tokenizers",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "webrtc-vad",
+]
+
+[[package]]
+name = "autosub-asr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "hf-hub",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokenizers",
+ "tokio",
+ "tracing",
  "webrtc-vad",
 ]
 

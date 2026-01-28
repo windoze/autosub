@@ -49,7 +49,7 @@ pub enum Device {
     #[cfg(feature = "cuda")]
     /// Use CUDA GPU for inference
     Cuda,
-    #[cfg(feature = "metal")]
+    #[cfg(target_os = "macos")]
     /// Use Metal GPU for inference (Apple Silicon)
     Metal,
 }
@@ -64,7 +64,7 @@ impl Device {
             Self::Cpu => Ok(candle_core::Device::Cpu),
             #[cfg(feature = "cuda")]
             Self::Cuda => Self::try_cuda_with_fallback(),
-            #[cfg(feature = "metal")]
+            #[cfg(target_os = "macos")]
             Self::Metal => Self::try_metal_with_fallback(),
         }
     }
@@ -72,7 +72,7 @@ impl Device {
     /// Automatically select the best available device
     fn auto_select_device() -> anyhow::Result<candle_core::Device> {
         // Try Metal first (macOS with Apple Silicon)
-        #[cfg(feature = "metal")]
+        #[cfg(target_os = "macos")]
         {
             if let Ok(device) = candle_core::Device::new_metal(0) {
                 tracing::info!("Using Metal GPU acceleration");
@@ -96,7 +96,7 @@ impl Device {
         Ok(candle_core::Device::Cpu)
     }
 
-    #[cfg(feature = "metal")]
+    #[cfg(target_os = "macos")]
     fn try_metal_with_fallback() -> anyhow::Result<candle_core::Device> {
         match candle_core::Device::new_metal(0) {
             Ok(device) => {

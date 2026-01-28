@@ -6,12 +6,11 @@ description = "CLI tool for video transcription and subtitle generation using Wh
 license = "MIT"
 
 [dependencies]
-# Candle for Whisper transcription
+# ASR engine
+autosub-asr = { path = "autosub-asr" }
+
+# Candle for device selection (still needed in CLI for config)
 candle-core = "0.9.2-alpha.1"
-candle-nn = "0.9.2-alpha.1"
-candle-transformers = "0.9.2-alpha.1"
-hf-hub = "0.4"
-tokenizers = "0.22"
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -50,8 +49,7 @@ webrtc-vad = "0.4"
 
 [features]
 default = []
-cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
-metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+cuda = ["autosub-asr/cuda", "candle-core/cuda"]
 
 # FFmpeg static linking - embeds FFmpeg libraries into the binary
 # This increases binary size but removes the need for system FFmpeg installation

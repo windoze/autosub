@@ -11,7 +11,7 @@ use autosub::{
     config::Config,
     srt::Subtitle,
     translate::translate_subtitles_to_file,
-    whisper::transcribe_stream_to_file,
+    whisper_cli::transcribe_stream_to_file,
 };
 
 fn main() -> ExitCode {
@@ -97,6 +97,7 @@ async fn run(mut config: Config) -> Result<()> {
         config.vad_reset_secs,
         || Some(create_progress_bar("Transcribing")),
     )
+    .await
     .context("Failed to transcribe audio")?;
 
     info!(

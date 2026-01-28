@@ -53,7 +53,7 @@ async fn test_async_runtime_with_metal() -> Result<()> {
     println!("Loaded {} samples", samples.len());
 
     // Load Whisper model with Metal if available
-    let device = if cfg!(feature = "metal") && cfg!(target_os = "macos") {
+    let device = if cfg!(target_os = "macos") {
         Device::new_metal(0).unwrap_or(Device::Cpu)
     } else if cfg!(feature = "cuda") {
         Device::new_cuda(0).unwrap_or(Device::Cpu)
@@ -165,7 +165,7 @@ async fn test_async_runtime_with_metal_longer() -> Result<()> {
     let samples = load_wav_samples(test_file.to_str().unwrap())?;
     println!("Loaded {} samples", samples.len());
 
-    let device = if cfg!(feature = "metal") && cfg!(target_os = "macos") {
+    let device = if cfg!(target_os = "macos") {
         Device::new_metal(0).unwrap_or(Device::Cpu)
     } else if cfg!(feature = "cuda") {
         Device::new_cuda(0).unwrap_or(Device::Cpu)
@@ -247,7 +247,7 @@ async fn test_async_with_progressbar_and_metal() -> Result<()> {
     let samples = load_wav_samples(test_file.to_str().unwrap())?;
     println!("Loaded {} samples", samples.len());
 
-    let device = if cfg!(feature = "metal") && cfg!(target_os = "macos") {
+    let device = if cfg!(target_os = "macos") {
         Device::new_metal(0).unwrap_or(Device::Cpu)
     } else if cfg!(feature = "cuda") {
         Device::new_cuda(0).unwrap_or(Device::Cpu)
