@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use tracing::info;
+use tracing::debug;
 
 use crate::error::Result;
 use crate::types::{AudioSegment, FileInfo};
@@ -26,7 +26,7 @@ impl AudioChunkReader {
         let reader = hound::WavReader::open(path)?;
 
         let spec = reader.spec();
-        info!(
+        debug!(
             "WAV file: {} Hz, {} channels, {} bits",
             spec.sample_rate, spec.channels, spec.bits_per_sample
         );

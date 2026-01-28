@@ -505,32 +505,32 @@ impl AsrEngine {
         mut input: mpsc::Receiver<AsrInput>,
         output: mpsc::Sender<TranscriptionResult>,
     ) -> Result<()> {
-        info!("ASR engine started with integrated VAD");
+        debug!("ASR engine started with integrated VAD");
 
         loop {
-            info!("ASR engine about to call input.recv()");
+            debug!("ASR engine about to call input.recv()");
 
             let msg = match input.blocking_recv() {
                 Some(m) => {
-                    info!("ASR engine received a message!");
+                    debug!("ASR engine received a message!");
                     m
                 }
                 None => {
-                    info!("ASR engine input channel closed");
+                    debug!("ASR engine input channel closed");
                     break;
                 }
             };
             let clips = match msg {
                 AsrInput::Samples(samples) => {
-                    info!("Processing {} audio samples through VAD", samples.len());
+                    debug!("Processing {} audio samples through VAD", samples.len());
                     let clips = self.segmenter.push_samples(&samples)?;
-                    info!("VAD processing returned {} clips", clips.len());
+                    debug!("VAD processing returned {} clips", clips.len());
                     clips
                 }
                 AsrInput::Flush => {
-                    info!("Flushing VAD segmenter and resetting timestamp position");
+                    debug!("Flushing VAD segmenter and resetting timestamp position");
                     let clips = self.segmenter.flush()?;
-                    info!("VAD flush returned {} clips", clips.len());
+                    debug!("VAD flush returned {} clips", clips.len());
                     // Reset timestamp position so next samples start from 0
                     // This is important for push-to-talk applications where each session
                     // should have timestamps starting from 0
@@ -541,7 +541,7 @@ impl AsrEngine {
 
             // Process each clip from the VAD segmenter
             for (idx, clip) in clips.iter().enumerate() {
-                info!(
+                debug!(
                     "VAD segment {}/{}: {:.2}s - {:.2}s ({} samples)",
                     idx + 1,
                     clips.len(),
@@ -550,14 +550,14 @@ impl AsrEngine {
                     clip.samples.len()
                 );
 
-                info!("Starting Whisper transcription for segment {}...", idx + 1);
+                debug!("Starting Whisper transcription for segment {}...", idx + 1);
                 let results = self.model.transcribe_clip(
                     clip,
                     self.language.as_deref(),
                     self.initial_prompt.as_deref(),
                     self.filter.as_deref(),
                 )?;
-                info!(
+                debug!(
                     "Whisper transcription completed for segment {}, got {} results",
                     idx + 1,
                     results.len()
@@ -565,14 +565,14 @@ impl AsrEngine {
 
                 for result in results {
                     if output.blocking_send(result).is_err() {
-                        info!("Output channel closed, stopping ASR engine");
+                        debug!("Output channel closed, stopping ASR engine");
                         return Ok(());
                     }
                 }
             }
         }
 
-        info!("ASR engine finished");
+        debug!("ASR engine finished");
         Ok(())
     }
 
@@ -582,28 +582,28 @@ impl AsrEngine {
         input: std_mpsc::Receiver<AsrInput>,
         output: std_mpsc::Sender<TranscriptionResult>,
     ) -> Result<()> {
-        info!("ASR engine started with integrated VAD (blocking mode)");
+        debug!("ASR engine started with integrated VAD (blocking mode)");
 
         loop {
             let msg = match input.recv() {
                 Ok(m) => m,
                 Err(_) => {
-                    info!("ASR engine input channel closed");
+                    debug!("ASR engine input channel closed");
                     break;
                 }
             };
 
             let clips = match msg {
                 AsrInput::Samples(samples) => {
-                    info!("Processing {} audio samples through VAD", samples.len());
+                    debug!("Processing {} audio samples through VAD", samples.len());
                     let clips = self.segmenter.push_samples(&samples)?;
-                    info!("VAD processing returned {} clips", clips.len());
+                    debug!("VAD processing returned {} clips", clips.len());
                     clips
                 }
                 AsrInput::Flush => {
-                    info!("Flushing VAD segmenter and resetting timestamp position");
+                    debug!("Flushing VAD segmenter and resetting timestamp position");
                     let clips = self.segmenter.flush()?;
-                    info!("VAD flush returned {} clips", clips.len());
+                    debug!("VAD flush returned {} clips", clips.len());
                     self.segmenter.reset_position();
                     clips
                 }
@@ -611,7 +611,7 @@ impl AsrEngine {
 
             // Process each clip from the VAD segmenter
             for (idx, clip) in clips.iter().enumerate() {
-                info!(
+                debug!(
                     "VAD segment {}/{}: {:.2}s - {:.2}s ({} samples)",
                     idx + 1,
                     clips.len(),
@@ -620,14 +620,14 @@ impl AsrEngine {
                     clip.samples.len()
                 );
 
-                info!("Starting Whisper transcription for segment {}...", idx + 1);
+                debug!("Starting Whisper transcription for segment {}...", idx + 1);
                 let results = self.model.transcribe_clip(
                     clip,
                     self.language.as_deref(),
                     self.initial_prompt.as_deref(),
                     self.filter.as_deref(),
                 )?;
-                info!(
+                debug!(
                     "Whisper transcription completed for segment {}, got {} results",
                     idx + 1,
                     results.len()
@@ -635,14 +635,14 @@ impl AsrEngine {
 
                 for result in results {
                     if output.send(result).is_err() {
-                        info!("Output channel closed, stopping ASR engine");
+                        debug!("Output channel closed, stopping ASR engine");
                         return Ok(());
                     }
                 }
             }
         }
 
-        info!("ASR engine finished");
+        debug!("ASR engine finished");
         Ok(())
     }
 }

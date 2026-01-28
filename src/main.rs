@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -206,16 +206,28 @@ async fn translate_subtitle(subtitle: &Subtitle, target_lang: &str, config: &Con
 /// Progress bar implementation for transcription progress
 struct ProgressBarCallback {
     progress_bar: ProgressBar,
+    initialized: std::sync::atomic::AtomicBool,
 }
 
 impl ProgressBarCallback {
     fn new(progress_bar: ProgressBar) -> Self {
-        Self { progress_bar }
+        Self {
+            progress_bar,
+            initialized: std::sync::atomic::AtomicBool::new(false),
+        }
     }
 }
 
 impl ProgressCallback for ProgressBarCallback {
     fn on_progress(&self, position: u64, total: u64) {
+        // Show the progress bar on first update (after model loading is complete)
+        if !self.initialized.load(std::sync::atomic::Ordering::Relaxed) {
+            self.progress_bar
+                .set_draw_target(ProgressDrawTarget::stderr());
+            self.initialized
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
         if self.progress_bar.length().is_none() || self.progress_bar.length() == Some(100) {
             self.progress_bar.set_length(total);
         }
@@ -229,7 +241,8 @@ impl ProgressCallback for ProgressBarCallback {
 }
 
 fn create_progress_bar(message: &str) -> ProgressBar {
-    let pb = ProgressBar::new(100);
+    // Create a hidden progress bar from the start to prevent any rendering during setup
+    let pb = ProgressBar::with_draw_target(Some(100), ProgressDrawTarget::hidden());
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{msg} [{elapsed_precise}] [{bar:43}] {percent}%")

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use tracing::info;
+use tracing::debug;
 
 extern crate ffmpeg_next as ffmpeg;
 
@@ -64,7 +64,7 @@ pub fn extract_audio(
     let temp_dir = std::env::temp_dir();
     let temp_wav = temp_dir.join(format!("autosub_audio_{}.wav", std::process::id()));
 
-    info!("Extracting audio to: {}", temp_wav.display());
+    debug!("Extracting audio to: {}", temp_wav.display());
 
     // Initialize ffmpeg (safe to call multiple times)
     ffmpeg::init().map_err(|e| AudioError::FfmpegInit(e.to_string()))?;
@@ -109,7 +109,7 @@ pub fn extract_audio(
     // Get source channel count from decoder
     let source_channels = decoder.channels();
 
-    info!(
+    debug!(
         "Input audio: {} Hz, {} channels",
         decoder.rate(),
         decoder.channels()
@@ -191,7 +191,7 @@ pub fn extract_audio(
         }
     }
 
-    info!("Total samples: {}", all_samples.len());
+    debug!("Total samples: {}", all_samples.len());
 
     // Write to WAV file using hound
     let spec = hound::WavSpec {
@@ -219,7 +219,7 @@ pub fn extract_audio(
         has_video,
     };
 
-    info!("Extraction complete: {:.2}s", duration_secs);
+    debug!("Extraction complete: {:.2}s", duration_secs);
 
     Ok(ExtractedAudio {
         path: temp_wav,

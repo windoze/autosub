@@ -8,7 +8,7 @@ use autosub_asr::{
 };
 use autosub_audio::AudioStream;
 use candle_core::Device;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::config::WhisperModelSize as ConfigModelSize;
 use crate::srt::{SrtWriter, Subtitle};
@@ -122,7 +122,11 @@ pub fn transcribe_to_file(
     // IMPORTANT: We intentionally run the ASR engine on the current thread (the same
     // thread that created/loaded the Whisper model). Some device backends (notably Metal)
     // can hang when a model is moved to a different thread for execution.
-    let (audio_tx, audio_rx) = mpsc::channel::<AsrInput>();
+    //
+    // Use a bounded channel (capacity 5) for audio input to prevent the audio extraction
+    // thread from getting too far ahead of transcription. This ensures the progress bar
+    // accurately reflects transcription progress rather than just audio extraction progress.
+    let (audio_tx, audio_rx) = mpsc::sync_channel::<AsrInput>(2);
     let (result_tx, result_rx) = mpsc::channel::<TranscriptionResult>();
 
     // Spawn SRT writing in a separate thread so we can keep streaming results to disk
@@ -147,7 +151,7 @@ pub fn transcribe_to_file(
     });
 
     // Run ASR engine in this thread (blocking).
-    info!("Starting ASR engine (same thread as model)");
+    debug!("Starting ASR engine (same thread as model)");
     let asr_result = asr_engine.run_blocking(audio_rx, result_tx);
 
     // Join threads (always attempt to join so we don't leave threads running on error).
@@ -163,7 +167,7 @@ pub fn transcribe_to_file(
     audio_result?;
     let subtitle = subtitle_result?;
 
-    info!("Transcription complete: {} segments", subtitle.len());
+    debug!("Transcription complete: {} segments", subtitle.len());
     Ok(subtitle)
 }
 
@@ -171,13 +175,13 @@ pub fn transcribe_to_file(
 /// This function is internal and handles all low-level audio processing
 fn extract_and_stream_audio(
     mut audio_stream: AudioStream,
-    audio_tx: mpsc::Sender<AsrInput>,
+    audio_tx: mpsc::SyncSender<AsrInput>,
     progress_callback: Option<Box<dyn ProgressCallback>>,
 ) -> Result<()> {
     let file_info = audio_stream.file_info();
     let total_duration_us = (file_info.duration_secs * 1_000_000.0) as u64;
 
-    info!("Extracting audio: {:.2} seconds", file_info.duration_secs);
+    debug!("Extracting audio: {:.2} seconds", file_info.duration_secs);
 
     // Stream audio samples to ASR engine
     while let Some(chunk) = audio_stream.next() {
@@ -195,7 +199,7 @@ fn extract_and_stream_audio(
         }
     }
 
-    info!("Audio extraction complete, flushing ASR engine");
+    debug!("Audio extraction complete, flushing ASR engine");
 
     // Send flush signal to process any remaining buffered audio
     audio_tx
