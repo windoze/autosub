@@ -29,10 +29,11 @@ This is the main CLI application that orchestrates audio extraction, transcripti
    - Output path generation (`.srt`, `.zh-CN.srt`, etc.)
 
 3. **Whisper CLI** (`src/whisper_cli.rs`)
-   - `transcribe_stream_to_file()` - Main transcription pipeline
+   - `transcribe_to_file()` - Main transcription pipeline
    - Coordinates AudioStream → ASR engine → SRT writer
-   - Spawns ASR engine in thread, uses async channels
-   - Real-time progress bar updates
+   - ASR engine runs on main thread (critical for Metal/GPU backends)
+   - SRT writer runs in separate thread for concurrent I/O
+   - Real-time progress bar updates via callback
    - Returns complete Subtitle for optional translation
 
 4. **SRT Handling** (`src/srt.rs`)
@@ -68,6 +69,31 @@ LLM (OpenAI/Anthropic/etc.)
     ↓
 video.zh-CN.srt
 ```
+
+### Threading Architecture
+
+The application uses a carefully designed threading model to handle Metal/GPU compatibility:
+
+1. **Main Thread** (in `tokio::task::spawn_blocking`)
+   - Creates Candle device and loads Whisper model
+   - Runs ASR engine synchronously with `run_blocking()`
+   - Critical: Model stays on same thread to avoid Metal threading issues
+
+2. **Audio Extraction Thread** (`std::thread`)
+   - Extracts audio from media file via FFmpeg
+   - Sends audio samples to ASR engine via channel
+   - Runs concurrently with transcription
+
+3. **SRT Writer Thread** (`std::thread`)
+   - Receives transcription results from ASR engine
+   - Writes SRT entries to disk in real-time
+   - Accumulates in-memory Subtitle for translation
+
+**Why This Design?**
+- Metal (and some other GPU backends) can hang when models are moved between threads
+- Solution: Create device + model + engine all in same thread, keep execution there
+- Trade-off: ASR is synchronous but still performant (GPU-accelerated)
+- Benefit: Audio extraction and SRT writing happen concurrently for maximum throughput
 
 ### Important Files
 
@@ -157,10 +183,11 @@ autosub video.mp4 --device cuda
 
 ### Adjusting VAD Behavior
 
-VAD settings in `src/whisper_cli.rs:66-82`:
+VAD settings are configured in `src/whisper_cli.rs` via `VadConfig`:
 - `mode: VadMode::Aggressive` - Filters out non-speech aggressively
 - `silence_reset_secs` - Seconds of silence before resetting ASR context
 - Lower values = more segments, higher values = more context but potential hallucinations
+- See `autosub-asr/src/vad.rs` for VadSegmenter implementation
 
 ### Customizing SRT Output
 
@@ -218,6 +245,7 @@ Most testing is done via integration tests in `autosub-audio` and `autosub-asr`.
 3. **Translation API Key** - Set environment variable before running
 4. **VAD Too Aggressive** - May cut off valid speech; try `--vad-reset-secs 2.0`
 5. **Large Files OOM** - Streaming design should handle this, but very large models on small RAM may fail
+6. **Metal Threading Issues** - Do NOT move model/device between threads; architecture handles this correctly
 
 ## Error Handling
 
@@ -280,5 +308,6 @@ cargo build --release --features cuda
 
 ## Recent Changes
 
-- 2026-01-28: Added initial prompt support to ASR engine
+- 2026-01-28: Fixed Metal threading issue - ASR engine now runs on main thread (same as model creation)
+- 2026-01-28: Added initial prompt support to ASR engine for better context
 - Earlier: Refactored to library crates, added VAD, added translation streaming

@@ -14,11 +14,12 @@ This crate provides the ASR (Automatic Speech Recognition) engine for the autosu
    - Manages decoder with timestamps for word-level alignment
    - Supports initial prompts to guide transcription
 
-2. **AsrEngine** (`src/model.rs:415-540`)
+2. **AsrEngine** (`src/model.rs:436-648`)
    - High-level API that integrates VAD + Whisper
    - Processes audio through channels: `AsrInput` → `TranscriptionResult`
    - Manages model lifecycle and context (KV cache)
-   - Runs in a dedicated thread/task
+   - Must run on same thread as model creation (critical for Metal/GPU)
+   - Provides both `run()` (blocking recv on async channels) and `run_blocking()` (std channels)
 
 3. **VAD (Voice Activity Detection)** (`src/vad.rs`)
    - Uses WebRTC VAD to segment speech from silence
@@ -78,6 +79,40 @@ Consumer (CLI/UI)
    - Each segment has precise start/end times
    - Sentences are split and timestamps distributed proportionally
 
+### Threading Safety
+
+**CRITICAL**: `AsrEngine` has special threading requirements due to GPU backend limitations:
+
+1. **Metal Backend Constraint**
+   - Metal (macOS GPU) can hang if models are moved between threads
+   - Solution: Create model and run engine on the **same thread**
+   - The engine has `unsafe impl Send` but should never be moved after creation
+
+2. **Recommended Usage Pattern**
+   ```rust
+   // Create model and device on thread A
+   let model = WhisperModel::load(config)?;
+   let engine = AsrEngine::new(model, language, vad_config)?;
+
+   // Run engine on SAME thread A
+   engine.run_blocking(input_rx, output_tx)?;
+   // OR
+   engine.run(input_rx, output_tx)?;  // uses blocking_recv internally
+   ```
+
+3. **Channel Interfaces**
+   - `run()`: Takes async `tokio::mpsc` channels, uses `blocking_recv()` internally
+   - `run_blocking()`: Takes std `std::sync::mpsc` channels, fully synchronous
+   - Both keep the engine synchronous to avoid thread migration
+
+4. **Why `unsafe impl Send`?**
+   - `WebRtcVad` contains a raw pointer (`*mut VadInst`) which is `!Send`
+   - The safety comment guarantees the VAD is never accessed concurrently
+   - The engine runs in a single task/thread and never migrates
+
+**DO**: Create model → create engine → run engine all on same thread
+**DON'T**: Move engine to another thread after creation
+
 ## Common Tasks
 
 ### Adding a New Model Size
@@ -119,11 +154,12 @@ Pass to `AsrEngine::with_filter()`.
 
 ## Common Pitfalls
 
-1. **Don't modify mel filter assets** - Regenerate via `scripts/generate_melfilters.py` if needed
-2. **Hallucination vs. Valid Text** - Default filter may have false positives; tune as needed
-3. **VAD Segment Length** - Very long segments (>30s) get truncated to N_FRAMES (3000 frames = 30s)
-4. **Thread Safety** - `AsrEngine` is `!Send` due to WebRtcVad; use `unsafe impl Send` with care
-5. **Initial Prompt Length** - Keep prompts concise; very long prompts may affect quality
+1. **Threading with Metal/GPU** - CRITICAL: Never move model or engine between threads after creation. Run on same thread always.
+2. **Don't modify mel filter assets** - Regenerate via `scripts/generate_melfilters.py` if needed
+3. **Hallucination vs. Valid Text** - Default filter may have false positives; tune as needed
+4. **VAD Segment Length** - Very long segments (>30s) get truncated to N_FRAMES (3000 frames = 30s)
+5. **Thread Safety of WebRtcVad** - `unsafe impl Send` is used with careful safety guarantees (single-task usage)
+6. **Initial Prompt Length** - Keep prompts concise; very long prompts may affect quality
 
 ## Dependencies
 
@@ -140,5 +176,7 @@ Pass to `AsrEngine::with_filter()`.
 
 ## Recent Changes
 
+- 2026-01-28: Fixed Metal threading issue - added `unsafe impl Send` with clear safety requirements
+- 2026-01-28: Changed `run()` to use `blocking_recv()` to keep engine synchronous on one thread
 - 2026-01-28: Added `initial_prompt` parameter to guide transcription
 - Earlier: Integrated VAD into AsrEngine, added hallucination filtering

@@ -218,5 +218,6 @@ The crate links to:
 
 ## Recent Changes
 
+- 2026-01-28: Minor code formatting improvements
 - 2026-01-28: Integration test achieves 96%+ accuracy with Whisper Tiny
 - Earlier: Migrated from file-based to streaming architecture
