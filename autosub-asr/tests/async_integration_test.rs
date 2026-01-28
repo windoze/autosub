@@ -328,3 +328,135 @@ async fn test_async_with_progressbar_and_metal() -> Result<()> {
 
     Ok(())
 }
+
+/// Test async runtime with multi-segment audio to verify async/sync interaction
+#[tokio::test]
+async fn test_async_multi_segment_audio() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+
+    let test_file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("test_data")
+        .join("test_multi_segment.wav");
+
+    println!("Loading multi-segment test file: {:?}", test_file);
+    let samples = load_wav_samples(test_file.to_str().unwrap())?;
+    println!("Loaded {} samples", samples.len());
+
+    let device = if cfg!(target_os = "macos") {
+        Device::new_metal(0).unwrap_or(Device::Cpu)
+    } else if cfg!(feature = "cuda") {
+        Device::new_cuda(0).unwrap_or(Device::Cpu)
+    } else {
+        Device::Cpu
+    };
+
+    println!("Using device: {:?}", device);
+
+    let config = WhisperModelConfig {
+        model_size: WhisperModelSize::Tiny,
+        cache_dir: None,
+        device,
+    };
+
+    println!("Loading Whisper Tiny model...");
+    let model = WhisperModel::load(config)?;
+
+    // Use aggressive VAD with shorter silence threshold to catch multiple segments
+    let vad_config = VadConfig {
+        sample_rate: 16000,
+        frame_duration_ms: 30,
+        mode: VadMode::Aggressive,
+        silence_reset_secs: 0.5,
+    };
+
+    let (input_tx, input_rx) = mpsc::channel::<AsrInput>(1000);
+    let (output_tx, mut output_rx) = mpsc::channel::<TranscriptionResult>(1000);
+
+    let engine = AsrEngine::new(model, Some("en".to_string()), vad_config)?;
+
+    // Spawn engine in std::thread (like CLI does)
+    println!("Spawning ASR engine in std::thread");
+    let engine_handle = std::thread::spawn(move || {
+        println!("ASR engine thread started");
+        engine.run(input_rx, output_tx)
+    });
+
+    // Spawn audio sender in std::thread (like CLI does)
+    let sender_handle = std::thread::spawn(move || {
+        println!("Sending {} samples to ASR engine", samples.len());
+        input_tx.blocking_send(AsrInput::Samples(samples))?;
+        input_tx.blocking_send(AsrInput::Flush)?;
+        drop(input_tx); // Close channel
+        println!("Audio sender finished");
+        Ok::<(), anyhow::Error>(())
+    });
+
+    // Collect results asynchronously
+    let mut results = Vec::new();
+    println!("Starting to collect results asynchronously");
+    while let Some(result) = output_rx.recv().await {
+        println!(
+            "Segment {}: [{:.2}s - {:.2}s] {}",
+            results.len() + 1,
+            result.start,
+            result.end,
+            result.text
+        );
+        results.push(result);
+    }
+    println!("Result collection complete");
+
+    // Wait for threads to complete
+    tokio::task::spawn_blocking(move || {
+        sender_handle.join().unwrap()?;
+        engine_handle.join().unwrap()?;
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+
+    println!("\n========================================");
+    println!("ASYNC MULTI-SEGMENT TEST RESULTS:");
+    println!("Total segments: {}", results.len());
+    for (i, result) in results.iter().enumerate() {
+        println!("  Segment {}: \"{}\"", i + 1, result.text);
+    }
+    println!("========================================\n");
+
+    // Verify we got at least 3 segments
+    assert!(
+        results.len() >= 3,
+        "Expected at least 3 segments, got {}",
+        results.len()
+    );
+
+    // Verify timestamps are generally increasing (allowing for small overlaps due to VAD flush)
+    for i in 1..results.len() {
+        // Check that segments generally progress forward in time
+        // Allow some overlap (up to 1 second) due to VAD flush behavior
+        assert!(
+            results[i].start >= results[i - 1].start - 1.0,
+            "Segment {} starts significantly before segment {}: {:.2}s < {:.2}s",
+            i + 1,
+            i,
+            results[i].start,
+            results[i - 1].start
+        );
+    }
+
+    // Verify the transcription contains expected content
+    let full_text: String = results.iter().map(|r| r.text.as_str()).collect();
+    let lower = full_text.to_lowercase();
+
+    // Should contain references to the numbers we spoke
+    assert!(
+        lower.contains("first") || lower.contains("second") || lower.contains("third"),
+        "Expected transcription to contain ordinal numbers, got: {}",
+        full_text
+    );
+
+    println!("✓ Async multi-segment test passed with {} segments!", results.len());
+    Ok(())
+}
