@@ -10,7 +10,7 @@ use autosub::{
     config::Config,
     srt::Subtitle,
     translate::translate_subtitles_to_file,
-    whisper_cli::transcribe_stream_to_file,
+    whisper_cli::{transcribe_to_file, ProgressCallback, TranscriptionConfig},
 };
 use autosub_audio::{cleanup_temp_files, AudioStream};
 
@@ -78,41 +78,45 @@ async fn run(mut config: Config) -> Result<()> {
         return run_translate_only(&config).await;
     }
 
-    // Step 1: Open audio stream (no temp file needed)
-    let audio_stream =
-        AudioStream::open(&config.input, None).context("Failed to open audio stream from input file")?;
+    // Step 1: Open audio stream from input file
+    let audio_stream = AudioStream::open(&config.input, None)
+        .context("Failed to open audio stream from input file")?;
 
-    info!(
-        "Audio duration: {:.2} seconds",
-        audio_stream.duration_secs()
-    );
+    info!("Audio duration: {:.2} seconds", audio_stream.duration_secs());
 
-    // Step 2: Transcribe with Whisper using streaming, writing SRT as we go
+    // Step 2: Transcribe with Whisper (fully blocking, no async)
     let output_path = config.output_path();
-    let device = config.device.to_candle_device()?;
-
     info!("Transcribing to: {}", output_path.display());
-    let subtitle = transcribe_stream_to_file(
-        audio_stream,
-        &output_path,
-        config.model,
-        Some(config.cache_dir()),
-        device,
-        config.language.as_deref(),
-        config.enable_vad,
-        config.vad_reset_secs,
-        || Some(create_progress_bar("Transcribing")),
-    )
+
+    let transcription_config = TranscriptionConfig {
+        model_size: config.model,
+        cache_dir: Some(config.cache_dir()),
+        device: config.device.to_candle_device()?,
+        language: config.language.clone(),
+        enable_vad: config.enable_vad,
+        vad_silence_secs: config.vad_reset_secs,
+        enable_hallucination_filter: true,
+    };
+
+    let progress_bar = create_progress_bar("Transcribing");
+    let progress_callback = ProgressBarCallback::new(progress_bar);
+    let output_path_clone = output_path.clone();
+
+    // Run transcription in a blocking task since it's fully synchronous
+    let subtitle = tokio::task::spawn_blocking(move || {
+        transcribe_to_file(
+            audio_stream,
+            &output_path_clone,
+            transcription_config,
+            Some(Box::new(progress_callback)),
+        )
+    })
     .await
-    .context("Failed to transcribe audio")?;
+    .context("Transcription task failed")??;
 
-    info!(
-        "Transcription complete: {} segments written to {}",
-        subtitle.len(),
-        output_path.display()
-    );
+    info!("Transcription complete: {} segments written to {}", subtitle.len(), output_path.display());
 
-    // Step 3: Translate if requested
+    // Step 3: Translate if requested (this needs async for HTTP requests)
     if let Some(ref target_lang) = config.translate {
         translate_subtitle(&subtitle, target_lang, &config).await?;
     }
@@ -181,6 +185,30 @@ async fn translate_subtitle(subtitle: &Subtitle, target_lang: &str, config: &Con
     );
 
     Ok(())
+}
+
+/// Progress bar implementation for transcription progress
+struct ProgressBarCallback {
+    progress_bar: ProgressBar,
+}
+
+impl ProgressBarCallback {
+    fn new(progress_bar: ProgressBar) -> Self {
+        Self { progress_bar }
+    }
+}
+
+impl ProgressCallback for ProgressBarCallback {
+    fn on_progress(&self, position: u64, total: u64) {
+        if self.progress_bar.length().is_none() || self.progress_bar.length() == Some(100) {
+            self.progress_bar.set_length(total);
+        }
+        self.progress_bar.set_position(position);
+    }
+
+    fn on_complete(&self) {
+        self.progress_bar.finish_with_message("Transcription complete");
+    }
 }
 
 fn create_progress_bar(message: &str) -> ProgressBar {

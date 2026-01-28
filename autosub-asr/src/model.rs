@@ -7,6 +7,7 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::whisper::{self as m, audio, Config};
 use hf_hub::api::sync::Api;
 use tokenizers::Tokenizer;
+use std::sync::mpsc as std_mpsc;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
@@ -492,8 +493,7 @@ impl AsrEngine {
         })
     }
 
-    /// Run the ASR engine, consuming raw audio samples or flush signals from input channel,
-    /// processing through VAD, and sending transcription results to output channel
+    /// Run the ASR engine with tokio async channels (for async applications)
     pub fn run(
         mut self,
         mut input: mpsc::Receiver<AsrInput>,
@@ -550,6 +550,67 @@ impl AsrEngine {
 
                 for result in results {
                     if output.blocking_send(result).is_err() {
+                        info!("Output channel closed, stopping ASR engine");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        info!("ASR engine finished");
+        Ok(())
+    }
+
+    /// Run the ASR engine with standard library blocking channels (for synchronous applications)
+    pub fn run_blocking(
+        mut self,
+        input: std_mpsc::Receiver<AsrInput>,
+        output: std_mpsc::Sender<TranscriptionResult>,
+    ) -> Result<()> {
+        info!("ASR engine started with integrated VAD (blocking mode)");
+
+        loop {
+            let msg = match input.recv() {
+                Ok(m) => m,
+                Err(_) => {
+                    info!("ASR engine input channel closed");
+                    break;
+                }
+            };
+
+            let clips = match msg {
+                AsrInput::Samples(samples) => {
+                    info!("Processing {} audio samples through VAD", samples.len());
+                    let clips = self.segmenter.push_samples(&samples)?;
+                    info!("VAD processing returned {} clips", clips.len());
+                    clips
+                }
+                AsrInput::Flush => {
+                    info!("Flushing VAD segmenter and resetting timestamp position");
+                    let clips = self.segmenter.flush()?;
+                    info!("VAD flush returned {} clips", clips.len());
+                    self.segmenter.reset_position();
+                    clips
+                }
+            };
+
+            // Process each clip from the VAD segmenter
+            for (idx, clip) in clips.iter().enumerate() {
+                info!(
+                    "VAD segment {}/{}: {:.2}s - {:.2}s ({} samples)",
+                    idx + 1,
+                    clips.len(),
+                    clip.start_time_secs(),
+                    clip.end_time_secs(),
+                    clip.samples.len()
+                );
+
+                info!("Starting Whisper transcription for segment {}...", idx + 1);
+                let results = self.model.transcribe_clip(clip, self.language.as_deref(), self.initial_prompt.as_deref(), self.filter.as_deref())?;
+                info!("Whisper transcription completed for segment {}, got {} results", idx + 1, results.len());
+
+                for result in results {
+                    if output.send(result).is_err() {
                         info!("Output channel closed, stopping ASR engine");
                         return Ok(());
                     }

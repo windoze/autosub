@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use autosub_audio::{AudioStream, StreamConfig};
 use autosub_asr::{
     AsrEngine, AsrInput, NoFilter, TranscriptionResult, VadConfig, VadMode, WhisperModel,
     WhisperModelConfig, WhisperModelSize,
 };
+use autosub_audio::{AudioStream, StreamConfig};
 use candle_core::Device;
 
 /// Helper function to normalize text for comparison
@@ -88,7 +88,7 @@ async fn test_audio_stream_with_asr() {
     // Load Whisper tiny model for fast testing
     let config = WhisperModelConfig {
         model_size: WhisperModelSize::Tiny,
-        cache_dir: None, // Use default cache
+        cache_dir: None,     // Use default cache
         device: Device::Cpu, // Use CPU for testing
     };
 
@@ -229,7 +229,7 @@ fn test_audio_stream_basic() {
     }
 
     // Open audio stream
-    let audio_stream = AudioStream::open(&test_video, None).expect("Failed to open audio stream");
+    let mut audio_stream = AudioStream::open(&test_video, None).expect("Failed to open audio stream");
 
     let file_info = audio_stream.file_info();
     assert!(file_info.duration_secs > 0.0, "Duration should be positive");
@@ -241,24 +241,21 @@ fn test_audio_stream_basic() {
 
     // Read at least one segment
     let mut segment_count = 0;
-    for segment_result in audio_stream {
-        let segment = segment_result.expect("Failed to read segment");
-        segment_count += 1;
 
-        assert!(!segment.samples.is_empty(), "Segment should have samples");
-        assert_eq!(segment.sample_rate, 16000);
-        assert!(
-            segment.end_sample > segment.start_sample,
-            "End sample should be greater than start sample"
-        );
-        assert!(
-            segment.end_time > segment.start_time,
-            "End time should be greater than start time"
-        );
+    // Only check first segment to keep test fast
+    let segment = audio_stream.next().expect("Failed to read segment").unwrap();
+    segment_count += 1;
 
-        // Only check first segment to keep test fast
-        break;
-    }
+    assert!(!segment.samples.is_empty(), "Segment should have samples");
+    assert_eq!(segment.sample_rate, 16000);
+    assert!(
+        segment.end_sample > segment.start_sample,
+        "End sample should be greater than start sample"
+    );
+    assert!(
+        segment.end_time > segment.start_time,
+        "End time should be greater than start time"
+    );
 
     assert!(segment_count > 0, "Should read at least one segment");
     println!("Basic audio stream test passed!");

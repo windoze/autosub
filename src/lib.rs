@@ -13,4 +13,4 @@ pub use srt::{SrtWriter, Subtitle, SubtitleEntry};
 pub use translate::{
     translate_subtitles, translate_subtitles_to_file, translate_subtitles_to_writer,
 };
-pub use whisper_cli::transcribe_stream_to_file;
+pub use whisper_cli::{transcribe_to_file, ProgressCallback, TranscriptionConfig};
