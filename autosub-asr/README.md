@@ -12,7 +12,7 @@ This crate provides a clean, channel-based interface for speech recognition. It'
 - **Pure ASR logic**: No file I/O, no progress bars, no CLI dependencies
 - **Whisper model support**: Tiny, Base, Small, Medium, and Large variants
 - **Language detection**: Auto-detect or specify language
-- **Hallucination filtering**: Built-in detection of common transcription errors
+- **Pluggable hallucination filtering**: Customizable filtering via plugin system
 - **Sentence segmentation**: Automatically split long segments into sentences
 - **Voice Activity Detection (VAD)**: Built-in WebRTC VAD for speech segmentation
 
@@ -81,10 +81,62 @@ pub type WebRtcVadMode = webrtc_vad::VadMode;
 
 The VAD segmenter processes audio samples and produces `AudioClip` instances containing only speech segments, filtering out silence and non-speech audio.
 
+### Hallucination Filtering
+
+The crate provides a plugin-based hallucination filtering system that allows you to control how transcription artifacts are detected and filtered:
+
+```rust
+pub trait HallucinationFilter: Send {
+    fn is_hallucinated(&self, text: &str) -> bool;
+}
+
+// Built-in filters
+pub struct DefaultHallucinationFilter;  // Filters common hallucination patterns
+pub struct NoFilter;                    // Disables filtering (passes everything through)
+```
+
+You can create custom filters by implementing the `HallucinationFilter` trait, or use the built-in filters:
+
+```rust
+use autosub_asr::{AsrEngine, DefaultHallucinationFilter, NoFilter};
+
+// Use default hallucination filter
+let engine = AsrEngine::new(model, Some("en".to_string()), vad_config)?;
+
+// Disable filtering completely
+let engine = AsrEngine::with_filter(
+    model,
+    Some("en".to_string()),
+    vad_config,
+    Some(Box::new(NoFilter)),
+)?;
+
+// Use custom filter
+struct MyCustomFilter;
+impl HallucinationFilter for MyCustomFilter {
+    fn is_hallucinated(&self, text: &str) -> bool {
+        // Your custom logic here
+        text.len() < 3
+    }
+}
+
+let engine = AsrEngine::with_filter(
+    model,
+    Some("en".to_string()),
+    vad_config,
+    Some(Box::new(MyCustomFilter)),
+)?;
+```
+
+**Note**: The default filter may occasionally produce false positives (filtering valid text). If you need complete transcription output, use `NoFilter` or implement a custom filter tuned to your use case.
+
 ## Usage Example
 
 ```rust
-use autosub_asr::{AsrEngine, AudioClip, WhisperModel, WhisperModelConfig, WhisperModelSize};
+use autosub_asr::{
+    AsrEngine, AsrInput, VadConfig, VadMode, WhisperModel,
+    WhisperModelConfig, WhisperModelSize,
+};
 use tokio::sync::mpsc;
 
 #[tokio::main]
@@ -97,26 +149,32 @@ async fn main() -> anyhow::Result<()> {
     };
     let model = WhisperModel::load(config)?;
 
+    // Configure VAD
+    let vad_config = VadConfig {
+        sample_rate: 16000,
+        frame_duration_ms: 30,
+        mode: VadMode::Quality,
+        silence_reset_secs: 1.0,
+    };
+
     // Create channels
-    let (audio_tx, audio_rx) = mpsc::channel::<AudioClip>(10);
+    let (audio_tx, audio_rx) = mpsc::channel::<AsrInput>(100);
     let (result_tx, mut result_rx) = mpsc::channel(100);
 
-    // Create and spawn ASR engine
-    let engine = AsrEngine::new(model, Some("en".to_string()));
+    // Create and spawn ASR engine (with default hallucination filter)
+    let engine = AsrEngine::new(model, Some("en".to_string()), vad_config)?;
     let asr_task = tokio::spawn(async move {
         engine.run(audio_rx, result_tx).await
     });
 
-    // Send audio clips
+    // Send audio samples
     tokio::spawn(async move {
-        // Example: send audio clips
-        let clip = AudioClip::new(
-            vec![0.0; 16000], // 1 second of silence
-            0,
-            16000,
-            true,
-        );
-        audio_tx.send(clip).await.unwrap();
+        // Send raw audio samples (VAD will segment them)
+        let samples = vec![0.0; 16000]; // 1 second of audio at 16kHz
+        audio_tx.send(AsrInput::Samples(samples)).await.unwrap();
+
+        // Signal end of stream
+        audio_tx.send(AsrInput::Flush).await.unwrap();
     });
 
     // Receive results

@@ -5,12 +5,12 @@ use autosub_asr::{
     AsrEngine, AsrInput, TranscriptionResult, VadConfig, VadMode, WhisperModel,
     WhisperModelConfig, WhisperModelSize,
 };
+use autosub_audio::AudioStream;
 use candle_core::Device;
 use indicatif::ProgressBar;
 use tokio::sync::mpsc;
 use tracing::info;
 
-use crate::audio::AudioStream;
 use crate::config::WhisperModelSize as ConfigModelSize;
 use crate::srt::{SrtWriter, Subtitle};
 
@@ -65,7 +65,7 @@ where
     // Configure VAD
     let vad_config = if vad_enabled {
         VadConfig {
-            sample_rate: crate::audio::WHISPER_SAMPLE_RATE,
+            sample_rate: autosub_audio::DEFAULT_SAMPLE_RATE,
             frame_duration_ms: 30,
             mode: VadMode::Aggressive,
             silence_reset_secs: vad_silence_secs,
@@ -74,7 +74,7 @@ where
         // Even without VAD enabled, we still need a config
         // Set silence_reset_secs to a very large value to effectively disable auto-segmentation
         VadConfig {
-            sample_rate: crate::audio::WHISPER_SAMPLE_RATE,
+            sample_rate: autosub_audio::DEFAULT_SAMPLE_RATE,
             frame_duration_ms: 30,
             mode: VadMode::Quality,
             silence_reset_secs: 999999.0,
@@ -136,7 +136,8 @@ fn process_audio_stream_blocking(
     progress: Option<ProgressBar>,
 ) -> Result<()> {
     let duration_secs = audio_stream.duration_secs();
-    let total_duration_us = audio_stream.total_duration_us();
+    let file_info = audio_stream.file_info();
+    let total_duration_us = (file_info.duration_secs * 1_000_000.0) as i64;
 
     info!(
         "Streaming transcription: {:.2} seconds of audio",
@@ -161,20 +162,20 @@ fn process_audio_stream_blocking(
         info!("Read audio chunk {} from stream", chunk_count);
 
         match chunk {
-            Ok(samples) => {
-                info!("Forwarding {} samples to ASR engine", samples.len());
+            Ok(segment) => {
+                info!("Forwarding {} samples to ASR engine", segment.samples.len());
                 audio_tx
-                    .blocking_send(AsrInput::Samples(samples))
+                    .blocking_send(AsrInput::Samples(segment.samples))
                     .map_err(|_| anyhow::anyhow!("Failed to send audio samples to ASR engine"))?;
                 info!("Successfully sent samples to ASR engine");
 
                 if let Some(pb) = progress.as_ref() {
-                    let pos = audio_stream.current_position_us();
+                    let pos = audio_stream.position_us();
                     pb.set_position(pos as u64);
                 }
             }
             Err(e) => {
-                return Err(e).context("Failed to read audio chunk");
+                return Err(anyhow::anyhow!(e)).context("Failed to read audio chunk");
             }
         }
     }

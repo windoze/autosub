@@ -1,11 +1,11 @@
-pub mod audio;
 pub mod config;
 pub mod srt;
 pub mod translate;
 pub mod whisper_cli;
 
-pub use audio::{
-    cleanup_orphaned_temp_files, extract_audio, is_audio_file, is_media_file, is_video_file,
+// Re-export audio types from autosub_audio for backward compatibility
+pub use autosub_audio::{
+    cleanup_temp_files, extract_audio, is_audio_file, is_media_file, is_video_file,
     AudioChunkReader, AudioStream, ExtractedAudio,
 };
 pub use config::Config;

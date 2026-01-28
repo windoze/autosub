@@ -7,16 +7,22 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use autosub::{
-    audio::{cleanup_orphaned_temp_files, AudioStream},
     config::Config,
     srt::Subtitle,
     translate::translate_subtitles_to_file,
     whisper_cli::transcribe_stream_to_file,
 };
+use autosub_audio::{cleanup_temp_files, AudioStream};
 
 fn main() -> ExitCode {
+    // Initialize FFmpeg
+    if let Err(e) = autosub_audio::init() {
+        eprintln!("Failed to initialize FFmpeg: {}", e);
+        return ExitCode::FAILURE;
+    }
+
     // Clean up any orphaned temp files from previous runs that were killed
-    cleanup_orphaned_temp_files();
+    cleanup_temp_files();
 
     let config = Config::parse();
 
@@ -74,7 +80,7 @@ async fn run(mut config: Config) -> Result<()> {
 
     // Step 1: Open audio stream (no temp file needed)
     let audio_stream =
-        AudioStream::open(&config.input).context("Failed to open audio stream from input file")?;
+        AudioStream::open(&config.input, None).context("Failed to open audio stream from input file")?;
 
     info!(
         "Audio duration: {:.2} seconds",

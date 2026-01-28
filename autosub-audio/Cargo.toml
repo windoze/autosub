@@ -1,0 +1,48 @@
+[package]
+name = "autosub-audio"
+version = "0.1.0"
+edition = "2021"
+description = "Audio extraction and streaming from media files for ASR applications"
+license = "MIT"
+
+[dependencies]
+# FFmpeg for audio decoding/resampling
+ffmpeg-next = "8"
+
+# Audio I/O
+hound = "3.5"
+bytemuck = "1.21"
+
+# Async runtime and channels (for both tokio mpsc and std mpsc support)
+tokio = { version = "1", features = ["sync"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+
+# Progress tracking (optional)
+indicatif = { version = "0.18", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# ASR engine for integration tests
+autosub-asr = { path = "../autosub-asr" }
+# Async runtime for tests
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
+# Candle for device selection in tests
+candle-core = "0.9.2-alpha.1"
+# Logging for tests
+tracing-subscriber = "0.3"
+
+[features]
+default = []
+# Static/build features pass through to ffmpeg-next
+ffmpeg-static = ["ffmpeg-next/static"]
+ffmpeg-build = ["ffmpeg-next/build"]
+# Progress bar support
+progress = ["indicatif"]

@@ -1,3 +1,6 @@
+[workspace]
+members = ["autosub-asr", "autosub-audio"]
+
 [package]
 name = "autosub"
 version = "0.1.0"
@@ -8,6 +11,9 @@ license = "MIT"
 [dependencies]
 # ASR engine
 autosub-asr = { path = "autosub-asr" }
+
+# Audio extraction and streaming
+autosub-audio = { path = "autosub-audio" }
 
 # Candle for device selection (still needed in CLI for config)
 candle-core = "0.9.2-alpha.1"
@@ -38,26 +44,17 @@ indicatif = "0.18"
 # Directories for cache
 dirs = "6"
 
-# Audio processing
-rubato = "0.16"
-bytemuck = "1.21"
-hound = "3.5"
-byteorder = "1.5"
-ffmpeg-next = "8"
-libc = "0.2"
-webrtc-vad = "0.4"
-
 [features]
 default = []
 cuda = ["autosub-asr/cuda", "candle-core/cuda"]
 
 # FFmpeg static linking - embeds FFmpeg libraries into the binary
 # This increases binary size but removes the need for system FFmpeg installation
-ffmpeg-static = ["ffmpeg-next/static"]
+ffmpeg-static = ["autosub-audio/ffmpeg-static"]
 
 # FFmpeg build from source - builds FFmpeg from source code during compilation
 # This provides maximum control but significantly increases compile time
-ffmpeg-build = ["ffmpeg-next/build"]
+ffmpeg-build = ["autosub-audio/ffmpeg-build"]
 
 # Auto-enable metal on macOS when no explicit feature is selected
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -10,6 +10,7 @@ use tokenizers::Tokenizer;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
+use crate::filter::HallucinationFilter;
 use crate::types::{AsrInput, AudioClip, TranscriptionResult};
 use crate::vad::{VadConfig, VadSegmenter, WebRtcVad};
 
@@ -155,6 +156,7 @@ impl WhisperModel {
         &mut self,
         clip: &AudioClip,
         language: Option<&str>,
+        filter: Option<&dyn HallucinationFilter>,
     ) -> Result<Vec<TranscriptionResult>> {
         let n_mels = self.config.num_mel_bins;
 
@@ -162,12 +164,12 @@ impl WhisperModel {
             return Ok(Vec::new());
         }
 
+        // Only reset KV cache when explicitly signaled (after long silence)
+        // This preserves context across consecutive VAD segments for better accuracy
         if clip.reset_context {
-            debug!("Resetting ASR context");
+            debug!("Resetting ASR context due to long silence");
+            self.model.reset_kv_cache();
         }
-
-        // Always start each decode with a clean cache
-        self.model.reset_kv_cache();
 
         let mel = audio::pcm_to_mel(&self.config, &clip.samples, &self.mel_filters);
         let mel_len = mel.len();
@@ -204,10 +206,26 @@ impl WhisperModel {
             let text = self.decode_tokens(&seg.tokens)?;
             let text = text.trim();
 
-            // Skip empty, blank audio markers, and hallucinated garbage
-            if text.is_empty() || text == "[BLANK_AUDIO]" || is_hallucinated_text(text) {
+            // Skip empty or blank audio markers
+            if text.is_empty() {
+                debug!("Decoded empty text for segment");
                 continue;
             }
+
+            if text == "[BLANK_AUDIO]" {
+                debug!("Decoded [BLANK_AUDIO] marker");
+                continue;
+            }
+
+            // Apply hallucination filter if configured
+            if let Some(f) = filter {
+                if f.is_hallucinated(text) {
+                    debug!("Filtered as hallucination: '{}'", text);
+                    continue;
+                }
+            }
+
+            debug!("Valid segment text: '{}'", text);
 
             let time_offset = clip.start_time_secs();
             let mut start_time = time_offset + seg.start;
@@ -399,6 +417,7 @@ pub struct AsrEngine {
     model: WhisperModel,
     language: Option<String>,
     segmenter: VadSegmenter<WebRtcVad>,
+    filter: Option<Box<dyn crate::filter::HallucinationFilter>>,
 }
 
 // SAFETY: AsrEngine is only used within a single tokio task and never shared across threads.
@@ -407,8 +426,29 @@ pub struct AsrEngine {
 unsafe impl Send for AsrEngine {}
 
 impl AsrEngine {
-    /// Create a new ASR engine with VAD
+    /// Create a new ASR engine with VAD and default hallucination filter
     pub fn new(model: WhisperModel, language: Option<String>, vad_config: VadConfig) -> Result<Self> {
+        Self::with_filter(
+            model,
+            language,
+            vad_config,
+            Some(Box::new(crate::filter::DefaultHallucinationFilter::new())),
+        )
+    }
+
+    /// Create a new ASR engine with custom hallucination filter
+    ///
+    /// # Arguments
+    /// * `model` - Whisper model to use for transcription
+    /// * `language` - Optional language code (e.g., "en")
+    /// * `vad_config` - Voice activity detection configuration
+    /// * `filter` - Optional custom hallucination filter (None = no filtering)
+    pub fn with_filter(
+        model: WhisperModel,
+        language: Option<String>,
+        vad_config: VadConfig,
+        filter: Option<Box<dyn crate::filter::HallucinationFilter>>,
+    ) -> Result<Self> {
         let vad = WebRtcVad::new(
             vad_config.sample_rate,
             vad_config.frame_duration_ms,
@@ -425,6 +465,7 @@ impl AsrEngine {
             model,
             language,
             segmenter,
+            filter,
         })
     }
 
@@ -481,7 +522,7 @@ impl AsrEngine {
                 );
 
                 info!("Starting Whisper transcription for segment {}...", idx + 1);
-                let results = self.model.transcribe_clip(&clip, self.language.as_deref())?;
+                let results = self.model.transcribe_clip(&clip, self.language.as_deref(), self.filter.as_deref())?;
                 info!("Whisper transcription completed for segment {}, got {} results", idx + 1, results.len());
 
                 for result in results {
@@ -546,97 +587,4 @@ fn split_into_sentences(text: &str, start: f64, end: f64) -> Vec<(f64, f64, Stri
     }
 
     result
-}
-
-/// Check if text appears to be hallucinated garbage
-fn is_hallucinated_text(text: &str) -> bool {
-    if text.chars().count() < 2 {
-        return true;
-    }
-
-    let suspicious_scripts = text.chars().any(|c| {
-        matches!(c,
-            '\u{0D80}'..='\u{0DFF}' |  // Sinhala
-            '\u{1780}'..='\u{17FF}' |  // Khmer
-            '\u{1200}'..='\u{137F}'    // Ethiopic
-        )
-    });
-
-    if suspicious_scripts {
-        return true;
-    }
-
-    let sentences: Vec<&str> = text
-        .split(['.', '!', '?', '。', '！', '？'])
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    if sentences.len() >= 3 {
-        let mut seen = std::collections::HashMap::new();
-        for sentence in &sentences {
-            *seen.entry(*sentence).or_insert(0) += 1;
-        }
-        if seen.values().any(|&count| count >= 3) {
-            return true;
-        }
-    }
-
-    if let Some((longest_substr, repeat_count)) = find_longest_repeated_substring(text) {
-        if repeat_count >= 5 && longest_substr.chars().count() >= 3 {
-            return true;
-        }
-    }
-
-    if text.contains("字幕")
-        || text.contains("(下集")
-        || text.contains("謝謝大家")
-        || text.contains("www.")
-        || text.contains("http")
-    {
-        return true;
-    }
-
-    false
-}
-
-fn find_longest_repeated_substring(s: &str) -> Option<(String, usize)> {
-    let n = s.len();
-    if n == 0 {
-        return None;
-    }
-
-    let mut suffixes: Vec<&str> = s.char_indices().map(|(i, _)| &s[i..]).collect();
-    suffixes.sort();
-
-    let mut max_byte_len = 0;
-    let mut longest_substr = "";
-    let mut significant_repeats_count = 0;
-
-    for pair in suffixes.windows(2) {
-        let u = pair[0];
-        let v = pair[1];
-
-        let common_byte_len: usize = u
-            .chars()
-            .zip(v.chars())
-            .take_while(|(a, b)| a == b)
-            .map(|(a, _)| a.len_utf8())
-            .sum();
-
-        if common_byte_len > 0 {
-            significant_repeats_count += 1;
-        }
-
-        if common_byte_len > max_byte_len {
-            max_byte_len = common_byte_len;
-            longest_substr = &u[..max_byte_len];
-        }
-    }
-
-    if max_byte_len > 0 {
-        Some((longest_substr.to_string(), significant_repeats_count))
-    } else {
-        None
-    }
 }
