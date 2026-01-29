@@ -1,16 +1,19 @@
 {
     "cSpell.words": [
+        "argmax",
         "autosub",
         "bytemuck",
         "byteorder",
         "CUDA",
         "deepseek",
+        "dtype",
         "envrc",
         "flac",
         "freqs",
         "gyan",
         "Hann",
         "ictx",
+        "idxs",
         "indicatif",
         "libavcodec",
         "libavdevice",
@@ -20,14 +23,19 @@
         "libc",
         "libswresample",
         "libswscale",
+        "logits",
         "melfilters",
         "mels",
+        "ndarray",
+        "NGRAM",
         "Ollama",
+        "onnx",
         "pacman",
         "qwen",
         "resampler",
         "rustfft",
         "serde",
-        "stft"
+        "stft",
+        "webrtc"
     ]
 }
