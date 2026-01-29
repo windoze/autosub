@@ -7,7 +7,9 @@
         "deepseek",
         "envrc",
         "flac",
+        "freqs",
         "gyan",
+        "Hann",
         "ictx",
         "indicatif",
         "libavcodec",
@@ -19,10 +21,13 @@
         "libswresample",
         "libswscale",
         "melfilters",
+        "mels",
         "Ollama",
         "pacman",
         "qwen",
         "resampler",
-        "serde"
+        "rustfft",
+        "serde",
+        "stft"
     ]
 }
