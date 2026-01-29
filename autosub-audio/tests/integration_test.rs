@@ -5,7 +5,6 @@ use autosub_asr::{
     WhisperModelConfig, WhisperModelSize,
 };
 use autosub_audio::{AudioStream, StreamConfig};
-use candle_core::Device;
 
 /// Helper function to normalize text for comparison
 /// Removes extra whitespace and makes comparison case-insensitive
@@ -88,8 +87,8 @@ async fn test_audio_stream_with_asr() {
     // Load Whisper tiny model for fast testing
     let config = WhisperModelConfig {
         model_size: WhisperModelSize::Tiny,
-        cache_dir: None,     // Use default cache
-        device: Device::Cpu, // Use CPU for testing
+        cache_dir: None, // Use default cache
+        execution_providers: vec![ort::ep::CPU::default().build()], // Use CPU for testing
     };
 
     println!("Loading Whisper tiny model...");

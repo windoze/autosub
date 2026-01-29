@@ -7,6 +7,14 @@ extern crate ffmpeg_next as ffmpeg;
 use crate::error::{AudioError, Result};
 use crate::types::FileInfo;
 
+fn normalize_channel_layout(layout: ffmpeg::ChannelLayout, channels: u16) -> ffmpeg::ChannelLayout {
+    if layout.is_empty() || layout.channels() != channels as i32 {
+        ffmpeg::ChannelLayout::default(channels as i32)
+    } else {
+        layout
+    }
+}
+
 /// A handle to an extracted audio file in a temp directory.
 /// The file is automatically cleaned up when this struct is dropped.
 pub struct ExtractedAudio {
@@ -115,10 +123,16 @@ pub fn extract_audio(
         decoder.channels()
     );
 
+    // Some containers/codecs report an unspecified/empty channel layout even though a channel
+    // count is present. Swresample treats this as a configuration mismatch and may error with
+    // "Input changed" when frames arrive. Normalize to a default layout derived from the channel
+    // count when the layout is missing or inconsistent.
+    let source_layout = normalize_channel_layout(decoder.channel_layout(), source_channels);
+
     // Set up resampler to convert to target sample rate, mono, i16
     let mut resampler = ffmpeg::software::resampling::context::Context::get(
         decoder.format(),
-        decoder.channel_layout(),
+        source_layout,
         decoder.rate(),
         ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed),
         ffmpeg::ChannelLayout::MONO,
@@ -146,13 +160,43 @@ pub fn extract_audio(
 
             let mut decoded_frame = ffmpeg::frame::Audio::empty();
             while decoder.receive_frame(&mut decoded_frame).is_ok() {
+                let normalized_layout =
+                    normalize_channel_layout(decoded_frame.channel_layout(), decoded_frame.channels());
+                if normalized_layout != decoded_frame.channel_layout() {
+                    decoded_frame.set_channel_layout(normalized_layout);
+                }
+
                 // Resample the frame
                 let mut resampled_frame = ffmpeg::frame::Audio::empty();
-                resampler
-                    .run(&decoded_frame, &mut resampled_frame)
+                if let Err(e) = resampler.run(&decoded_frame, &mut resampled_frame) {
+                    debug!("Resampler input changed ({}); rebuilding resampler", e);
+                    resampler = ffmpeg::software::resampling::context::Context::get(
+                        decoded_frame.format(),
+                        normalize_channel_layout(
+                            decoded_frame.channel_layout(),
+                            decoded_frame.channels(),
+                        ),
+                        decoded_frame.rate(),
+                        ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed),
+                        ffmpeg::ChannelLayout::MONO,
+                        sample_rate,
+                    )
                     .map_err(|e| {
-                        AudioError::Resample(format!("Failed to resample audio frame: {}", e))
+                        AudioError::Resample(format!(
+                            "Failed to create audio resampler after input change: {}",
+                            e
+                        ))
                     })?;
+
+                    resampler
+                        .run(&decoded_frame, &mut resampled_frame)
+                        .map_err(|e| {
+                            AudioError::Resample(format!(
+                                "Failed to resample audio frame after input change: {}",
+                                e
+                            ))
+                        })?;
+                }
 
                 // Extract samples from the resampled frame
                 if resampled_frame.samples() > 0 {

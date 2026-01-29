@@ -1,5 +1,5 @@
-/// Audio preprocessing for Whisper model
-/// Implements mel spectrogram extraction compatible with OpenAI's Whisper preprocessing
+// Audio preprocessing for Whisper model
+// Implements mel spectrogram extraction compatible with OpenAI's Whisper preprocessing
 
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
@@ -59,19 +59,25 @@ fn stft(samples: &[f32], n_fft: usize, hop_length: usize) -> Vec<Vec<Complex<f32
     // Create Hann window
     let window = hann_window(n_fft);
 
-    let n_frames = (samples.len() - n_fft) / hop_length + 1;
-    let mut result = Vec::with_capacity(n_frames);
+    // Whisper uses `torch.stft(..., center=True, pad_mode="reflect")`.
+    // That implies padding by n_fft/2 on both sides, then dropping the last frame so the
+    // resulting spectrogram has exactly `CHUNK_LENGTH / HOP_LENGTH` frames (3000 for 30s audio).
+    let pad = n_fft / 2;
+    let padded = reflect_pad(samples, pad);
+
+    let n_frames = (padded.len() - n_fft) / hop_length + 1;
+    let mut result = Vec::with_capacity(n_frames.saturating_sub(1));
 
     for i in 0..n_frames {
         let start = i * hop_length;
         let end = start + n_fft;
 
-        if end > samples.len() {
+        if end > padded.len() {
             break;
         }
 
         // Apply window and prepare complex buffer
-        let mut buffer: Vec<Complex<f32>> = samples[start..end]
+        let mut buffer: Vec<Complex<f32>> = padded[start..end]
             .iter()
             .zip(window.iter())
             .map(|(&s, &w)| Complex::new(s * w, 0.0))
@@ -83,7 +89,48 @@ fn stft(samples: &[f32], n_fft: usize, hop_length: usize) -> Vec<Vec<Complex<f32
         result.push(buffer);
     }
 
+    // Drop the last frame to match Whisper's 3000-frame convention.
+    // (With center padding, torch.stft produces 3001 frames for 30s audio.)
+    result.pop();
+
     result
+}
+
+/// Reflect-pad a 1D signal on both sides, matching PyTorch's `pad_mode="reflect"`.
+///
+/// For a padding of `pad`, the left pad is `samples[pad..1]` (reversed) and the right pad is
+/// `samples[len-2 .. len-2-pad]` (reversed). This does not repeat edge samples.
+fn reflect_pad(samples: &[f32], pad: usize) -> Vec<f32> {
+    if pad == 0 {
+        return samples.to_vec();
+    }
+
+    // `reflect` padding requires at least `pad + 1` samples. Whisper inputs are always
+    // 30 seconds (480k samples), so this is a safe guard for tests and edge cases.
+    if samples.len() <= pad {
+        let mut out = Vec::with_capacity(samples.len() + 2 * pad);
+        out.resize(pad, 0.0);
+        out.extend_from_slice(samples);
+        out.resize(out.len() + pad, 0.0);
+        return out;
+    }
+
+    let mut out = Vec::with_capacity(samples.len() + 2 * pad);
+
+    // Left pad: samples[pad], samples[pad-1], ..., samples[1]
+    for i in (1..=pad).rev() {
+        out.push(samples[i]);
+    }
+
+    out.extend_from_slice(samples);
+
+    // Right pad: samples[len-2], samples[len-3], ..., samples[len-1-pad]
+    let len = samples.len();
+    for i in 0..pad {
+        out.push(samples[len - 2 - i]);
+    }
+
+    out
 }
 
 /// Compute power spectrum from STFT (magnitude squared)
@@ -101,11 +148,8 @@ fn stft_magnitudes(stft: &[Vec<Complex<f32>>]) -> Vec<Vec<f32>> {
 }
 
 /// Apply mel filter banks to magnitude spectrum
-fn apply_mel_filters(
-    magnitudes: &[Vec<f32>],
-    mel_filters: &[f32],
-    n_mels: usize,
-) -> Vec<Vec<f32>> {
+#[allow(clippy::needless_range_loop)]
+fn apply_mel_filters(magnitudes: &[Vec<f32>], mel_filters: &[f32], n_mels: usize) -> Vec<Vec<f32>> {
     let n_freqs = magnitudes[0].len();
     let n_frames = magnitudes.len();
 
@@ -140,10 +184,7 @@ fn log_mel_spectrogram(mel_spec: &[Vec<f32>]) -> Vec<f32> {
         .flat_map(|mel_bin| mel_bin.iter().map(|&val| val.max(clamp_value).log10()))
         .collect();
 
-    let max_log = log_mel
-        .iter()
-        .copied()
-        .fold(f32::NEG_INFINITY, f32::max);
+    let max_log = log_mel.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let min_log = max_log - 8.0;
 
     for x in &mut log_mel {
@@ -159,10 +200,7 @@ fn log_mel_spectrogram(mel_spec: &[Vec<f32>]) -> Vec<f32> {
 /// Create Hann window (periodic, matching `torch.hann_window(n_fft)` default)
 fn hann_window(n: usize) -> Vec<f32> {
     (0..n)
-        .map(|i| {
-            let w = 0.5 * (1.0 - (2.0 * PI * i as f32 / n as f32).cos());
-            w
-        })
+        .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / n as f32).cos()))
         .collect()
 }
 
@@ -188,8 +226,9 @@ mod tests {
         let samples = vec![0.0; 16000];
         let stft_result = stft(&samples, 400, 160);
 
-        // Should produce approximately (16000 - 400) / 160 + 1 = 98 frames
-        assert!(stft_result.len() > 90 && stft_result.len() < 100);
+        // With center reflection padding and dropping the last frame, we get:
+        //   frames = samples.len() / hop_length = 100
+        assert!(stft_result.len() >= 98 && stft_result.len() <= 102);
 
         // Each frame should have 400 complex samples
         assert_eq!(stft_result[0].len(), 400);

@@ -31,7 +31,7 @@ pub struct TranscriptionConfig {
 
 impl Device {
     /// Convert Device enum to ONNX Runtime execution providers
-    fn to_execution_providers(&self) -> Vec<ExecutionProviderDispatch> {
+    fn to_execution_providers(self) -> Vec<ExecutionProviderDispatch> {
         match self {
             Self::Auto => {
                 #[cfg(target_os = "macos")]
